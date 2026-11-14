@@ -1,6 +1,6 @@
 from django.contrib import admin
 from django.urls import include, path
-from django.views.generic import TemplateView
+from django.views.generic import RedirectView, TemplateView
 
 from portal.apps.accounts import views as account_views
 from portal.apps.content import views as content_views
@@ -11,6 +11,9 @@ from portal.apps.labs import agent_views as labs_agent_views
 
 urlpatterns = [
     path("admin/", admin.site.urls),
+    # Discord is the only auth path; the stock allauth login view expects a
+    # local username field we deliberately do not have.
+    path("accounts/login/", RedirectView.as_view(url="/accounts/discord/login/", permanent=False)),
     path("accounts/", include("allauth.urls")),
     path("status/", account_views.status_page, name="status"),
     path("settings/", account_views.settings_page, name="settings"),
