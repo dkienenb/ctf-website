@@ -1,0 +1,7 @@
+{% if user.is_authenticated %}
+  <p>Signed in as {{ user.cached_name }} (Discord ID {{ user.discord_id }}) — status: {{ user.status }}.</p>
+  {% if user.is_approved %}<p>Approved access active.</p>{% endif %}
+  <form method="post" action="{% url 'account_logout' %}">{% csrf_token %}<button type="submit">Sign out</button></form>
+{% else %}
+  <p><a href="{% url 'discord_login' %}">Sign in with Discord</a></p>
+{% endif %}
