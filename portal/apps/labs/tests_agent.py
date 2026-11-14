@@ -160,16 +160,16 @@ class AgentExecutorTests(TestCase):
                 directory = executor.images_dir / role
                 directory.mkdir(parents=True)
                 (directory / "domain.xml").write_text("<domain><name>@NAME@</name><disk>@DISK@</disk></domain>")
-            command = {"op_id": "abc123def456", "operation": "allocate", "payload": {"lab": 1}}
+            command = {"op_id": "abc123def456", "operation": "allocate", "payload": {"lab": 1}, "lab": 1}
             detail = workhorse_agent.execute(executor, command)
             self.assertFalse(detail["resumed"])
-            self.assertEqual(detail["domains"], ["ctf-abc123def456-atk", "ctf-abc123def456-tgt"])
+            self.assertEqual(detail["domains"], ["ctf-lab1-atk", "ctf-lab1-tgt"])
             defines = [call for call in executor.calls if call[0] == "define"]
             starts = [call for call in executor.calls if call[0] == "start"]
             self.assertEqual(len(defines), 2)
             self.assertEqual(len(starts), 2)
-            xml = (executor.disks_dir / "ctf-abc123def456-atk.xml").read_text()
-            self.assertIn("ctf-abc123def456-atk", xml)
+            xml = (executor.disks_dir / "ctf-lab1-atk.xml").read_text()
+            self.assertIn("ctf-lab1-atk", xml)
             self.assertIn("disk", xml)
 
     def test_save_saves_then_undefines(self):
@@ -188,10 +188,28 @@ class AgentExecutorTests(TestCase):
 
         with tempfile.TemporaryDirectory() as tmp:
             executor = self._executor(tmp)
-            workhorse_agent.execute(executor, {"op_id": "abc123def456", "operation": "reset-target", "payload": {}})
+            workhorse_agent.execute(executor, {"op_id": "abc123def456", "operation": "reset-target", "payload": {}, "lab": 1})
             self.assertTrue(all("-tgt" in call[1] for call in executor.calls if call[0] == "destroy"))
             executor.calls.clear()
-            workhorse_agent.execute(executor, {"op_id": "abc123def456", "operation": "reset-full", "payload": {}})
+            workhorse_agent.execute(executor, {"op_id": "abc123def456", "operation": "reset-full", "payload": {}, "lab": 1})
             destroyed = [call[1] for call in executor.calls if call[0] == "destroy"]
             self.assertTrue(any("atk" in name for name in destroyed))
             self.assertTrue(any("tgt" in name for name in destroyed))
+
+    def test_same_lab_domain_identity_across_operations(self):
+        """Allocate, save, and reset must address the SAME domain names (§12)."""
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmp:
+            executor = self._executor(tmp)
+            for role in ("attacker", "target"):
+                directory = executor.images_dir / role
+                directory.mkdir(parents=True)
+                (directory / "domain.xml").write_text("<domain><name>@NAME@</name><disk>@DISK@</disk></domain>")
+            lab_command = {"op_id": "op-allocate", "operation": "allocate", "payload": {"lab": 7}, "lab": 7}
+            detail = workhorse_agent.execute(executor, lab_command)
+            self.assertEqual(detail["domains"], ["ctf-lab7-atk", "ctf-lab7-tgt"])
+            save_command = {"op_id": "op-save-different-id", "operation": "save", "payload": {}, "lab": 7}
+            workhorse_agent.execute(executor, save_command)
+            saves = [call[1] for call in executor.calls if call[0] == "save"]
+            self.assertEqual(sorted(saves), ["ctf-lab7-atk", "ctf-lab7-tgt"])

@@ -61,16 +61,13 @@ def load_config(path=CONFIG_PATH):
     return config
 
 
-def _op_id_prefix(op_id):
-    return f"{DOMAIN_PREFIX}-{op_id[:12]}"
-
-
-def _attacker_domain(op_id):
-    return f"{_op_id_prefix(op_id)}-atk"
-
-
-def _target_domain(op_id):
-    return f"{_op_id_prefix(op_id)}-tgt"
+def _domain_base(command):
+    """Domain names are keyed to the LAB, not the command: every operation
+    (allocate, save, reset) on the same lab must address the same guests."""
+    lab = command.get("lab")
+    if lab is not None:
+        return f"lab{lab}"
+    return f"{command.get('op_id', 'unknown')[:12]}"
 
 
 class LibvirtExecutor:
@@ -107,14 +104,17 @@ class LibvirtExecutor:
 
     # --- operations -----------------------------------------------------
 
+    def _names(self, command):
+        base = _domain_base(command)
+        return f"ctf-{base}-atk", f"ctf-{base}-tgt", self.disks_dir / f"saved-{base}"
+
     def allocate(self, command):
         """Create/restore the attacker+target pair from pinned templates (§10)."""
         payload = command["payload"]
-        op_id = command["op_id"]
-        attacker, target = _attacker_domain(op_id), _target_domain(op_id)
+        attacker, target, saved_dir = self._names(command)
         defined = []
         try:
-            return self._allocate_pair(payload, op_id, attacker, target, defined)
+            return self._allocate_pair(payload, saved_dir, attacker, target, defined)
         except Exception:
             # Best-effort cleanup so failed allocations leave nothing behind.
             for domain in defined:
@@ -125,14 +125,12 @@ class LibvirtExecutor:
                     disk.unlink()
             raise
 
-    def _allocate_pair(self, payload, op_id, attacker, target, defined):
-        existing_state = self._saved_state(op_id)
-        if existing_state:
+    def _allocate_pair(self, payload, saved_dir, attacker, target, defined):
+        if (saved_dir / "attacker.save").exists():
             # Resume saved execution state rather than a fresh boot (§12).
-            if (existing_state / "attacker.save").exists():
-                self.virsh("restore", str(existing_state / "attacker.save"))
-            if (existing_state / "target.save").exists():
-                self.virsh("restore", str(existing_state / "target.save"))
+            if (saved_dir / "target.save").exists():
+                self.virsh("restore", str(saved_dir / "target.save"))
+            self.virsh("restore", str(saved_dir / "attacker.save"))
             return {"domains": [attacker, target], "resumed": True}
         template = self.images_dir / "attacker"
         target_template = self.images_dir / "target"
@@ -161,44 +159,36 @@ class LibvirtExecutor:
             capture_output=True, text=True, timeout=600, check=True,
         )
 
-    def _saved_state(self, op_id):
-        directory = self.disks_dir / f"saved-{op_id[:12]}"
-        return directory if (directory / "attacker.save").exists() else None
-
     def save(self, command):
         """Coordinated save-to-disk: attacker, then target (§12)."""
-        op_id = command["op_id"]
-        directory = self.disks_dir / f"saved-{op_id[:12]}"
-        directory.mkdir(parents=True, exist_ok=True)
-        attacker, target = _attacker_domain(op_id), _target_domain(op_id)
-        self.virsh("save", attacker, str(directory / "attacker.save"))
-        self.virsh("save", target, str(directory / "target.save"))
+        attacker, target, saved_dir = self._names(command)
+        saved_dir.mkdir(parents=True, exist_ok=True)
+        self.virsh("save", attacker, str(saved_dir / "attacker.save"))
+        self.virsh("save", target, str(saved_dir / "target.save"))
         for domain in (attacker, target):
             if self.domain_exists(domain):
                 self.virsh("undefine", domain)
-        return {"saved_dir": str(directory)}
+        return {"saved_dir": str(saved_dir)}
 
     def reset(self, command):
         """Destroy the pair and its writable disks; templates are recreated on
         the next allocate. Scope decides which guest is affected (§13)."""
-        op_id = command["op_id"]
         scope = command.get("scope", "target")
-        domains = [_target_domain(op_id)] if scope == "target" else [_attacker_domain(op_id), _target_domain(op_id)]
+        attacker, target, saved_dir = self._names(command)
+        domains = [target] if scope == "target" else [attacker, target]
         for domain in domains:
             self.virsh_tolerant("destroy", domain)
             self.virsh_tolerant("undefine", domain)
             disk = self.disks_dir / f"{domain}.qcow2"
             if disk.exists():
                 disk.unlink()
-        saved = self.disks_dir / f"saved-{op_id[:12]}"
-        if saved.exists():
-            shutil.rmtree(saved, ignore_errors=True)
+        if saved_dir.exists():
+            shutil.rmtree(saved_dir, ignore_errors=True)
         return {"reset": scope}
 
     def deadline_expired(self, command):
         """Host-local expiry: save both guests even without the controller (§11)."""
-        result = self.save({"op_id": command.get("op_id", "local"), "payload": {}})
-        return result
+        return self.save(command)
 
 
 VOCABULARY = {
@@ -206,6 +196,7 @@ VOCABULARY = {
     "save": lambda executor, command: executor.save(command),
     "reset-target": lambda executor, command: executor.reset({**command, "scope": "target"}),
     "reset-full": lambda executor, command: executor.reset({**command, "scope": "full"}),
+    "recover": lambda executor, command: executor.reset({**command, "scope": "target"}),
     "refresh-lease": lambda executor, command: {"acknowledged": command.get("acknowledged_deadline")},
 }
 
@@ -282,7 +273,8 @@ def run_once(client, executor, config, deadlines):
             detail = execute(executor, command)
             client.result(command["op_id"], "ok", detail)
         except Exception as error:  # report failures; never retry destructively
-            client.result(command["op_id"], "failed", {"error": str(error)[:300]})
+            print(f"agent: command {command['op_id'][:8]} failed: {error}", file=sys.stderr)
+            client.result(command["op_id"], "failed", {"error": str(error)[:500]})
         handled += 1
     enforce_deadlines(client, executor, deadlines)
     return handled
@@ -300,9 +292,9 @@ def enforce_deadlines(client, executor, deadlines):
             continue
         if expiry <= now:
             try:
-                executor.deadline_expired({"op_id": f"local-{lab_id}"})
+                executor.deadline_expired({"lab": lab_id, "op_id": f"local-{lab_id}"})
             except AgentError:
-                pass  # keep trying on later cycles; artifacts retained
+                print(f"agent: deadline save failed for lab {lab_id}; artifacts retained", file=sys.stderr)
             deadlines.pop(lab_id, None)
 
 
