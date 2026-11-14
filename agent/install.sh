@@ -17,8 +17,8 @@ id ctf-agent >/dev/null 2>&1 || useradd -r -s /usr/sbin/nologin ctf-agent
 usermod -aG kvm,libvirt ctf-agent
 
 echo "==> Storage directories"
-mkdir -p /var/lib/ctf/agent/images/attacker /var/lib/ctf/agent/images/target /var/lib/ctf/agent/disks /etc/ctf
-chown -R ctf-agent:ctf-agent /var/lib/ctf/agent
+mkdir -p /var/lib/libvirt/images/ctf/images/attacker /var/lib/libvirt/images/ctf/images/target /var/lib/libvirt/images/ctf/disks /etc/ctf
+chown -R ctf-agent:ctf-agent /var/lib/libvirt/images/ctf
 
 echo "==> Installing agent to /opt/ctf/agent"
 REPO_DIR="$(cd "$(dirname "$0")/.." && pwd)"

@@ -12,7 +12,7 @@ What it does:
    and enables `libvirtd`.
 2. Creates the restricted `ctf-agent` service user (no login shell) and grants
    only libvirt access via the `kvm` and `libvirt` groups.
-3. Creates `/var/lib/ctf/agent/{images,disks}` for versioned base images and
+3. Creates `/var/lib/libvirt/images/ctf/{images,disks}` for versioned base images and
    per-instance writable disks.
 4. Copies this `agent/` directory to `/opt/ctf/agent` and installs the
    `ctf-agent.service` systemd unit.

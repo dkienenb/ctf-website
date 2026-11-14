@@ -11,7 +11,7 @@ if [ "$(id -u)" -ne 0 ]; then
 fi
 
 REPO_DIR="$(cd "$(dirname "$0")/.." && pwd)"
-IMAGES=/var/lib/ctf/agent/images
+IMAGES=/var/lib/libvirt/images/ctf/images
 ISO_URL="https://dl-cdn.alpinelinux.org/alpine/v3.20/releases/x86_64/alpine-virt-3.20.3-x86_64.iso"
 
 for role in attacker target; do
@@ -52,7 +52,7 @@ fi
 virsh --connect qemu:///system net-autostart ctf-demo-lab
 virsh --connect qemu:///system net-start ctf-demo-lab 2>/dev/null || true
 
-chown -R ctf-agent:ctf-agent /var/lib/ctf/agent/images
+chown -R ctf-agent:ctf-agent /var/lib/libvirt/images/ctf/images
 
 echo "==> Demo templates ready:"
 virsh --connect qemu:///system net-info ctf-demo-lab | head -2

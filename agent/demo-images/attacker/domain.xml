@@ -21,7 +21,7 @@
     </disk>
     <disk type='file' device='cdrom'>
       <driver name='qemu' type='raw'/>
-      <source file='/var/lib/ctf/agent/images/attacker/demo.iso'/>
+      <source file='/var/lib/libvirt/images/ctf/images/attacker/demo.iso'/>
       <target dev='sdc' bus='sata'/>
       <readonly/>
     </disk>

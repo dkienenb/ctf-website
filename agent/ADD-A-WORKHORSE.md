@@ -43,7 +43,7 @@ sudo ./install.sh
 
 This installs `qemu-kvm` + `libvirt-daemon-system`, enables `libvirtd`,
 creates the login-disabled `ctf-agent` user (groups: `kvm`, `libvirt` only),
-creates `/var/lib/ctf/agent/{images,disks}`, installs the systemd unit, and
+creates `/var/lib/libvirt/images/ctf/{images,disks}`, installs the systemd unit, and
 starts the agent (it will poll without a valid token until step 5).
 
 ## 4. Register the host on the controller machine (token shown once)
@@ -100,12 +100,12 @@ Each role needs two files; missing templates make allocations fail loudly
 
 ```sh
 # on the controller or wherever images live:
-rsync -av images/attacker/ "$HOST_NAME":/var/lib/ctf/agent/images/attacker/
-rsync -av images/target/   "$HOST_NAME":/var/lib/ctf/agent/images/target/
+rsync -av images/attacker/ "$HOST_NAME":/var/lib/libvirt/images/ctf/images/attacker/
+rsync -av images/target/   "$HOST_NAME":/var/lib/libvirt/images/ctf/images/target/
 #   images/attacker/domain.xml     libvirt XML with @NAME@ and @DISK@ placeholders
 #   images/attacker/disk-template  qcow2 base image (Kali attacker)
 #   images/target/…                same pair for the vulnerable target
-sudo chown -R ctf-agent:ctf-agent /var/lib/ctf/agent/images
+sudo chown -R ctf-agent:ctf-agent /var/lib/libvirt/images/ctf/images
 ```
 
 ## 9. First real allocation test

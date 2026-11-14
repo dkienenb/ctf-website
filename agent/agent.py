@@ -29,8 +29,11 @@ import urllib.request
 from pathlib import Path
 
 CONFIG_PATH = os.environ.get("CTF_AGENT_CONFIG", "/etc/ctf/agent.toml")
-DEFAULT_IMAGES_DIR = "/var/lib/ctf/agent/images"
-DEFAULT_DISKS_DIR = "/var/lib/ctf/agent/disks"
+# Storage lives inside libvirt's own images area: Kali/Debian AppArmor
+# profiles (virt-aa-helper, per-domain profiles) permit this path by
+# default, so no per-host AppArmor surgery is needed.
+DEFAULT_IMAGES_DIR = "/var/lib/libvirt/images/ctf/images"
+DEFAULT_DISKS_DIR = "/var/lib/libvirt/images/ctf/disks"
 LIBVIRT_URI = os.environ.get("CTF_AGENT_LIBVIRT_URI", "qemu:///system")
 DOMAIN_PREFIX = "ctf"
 HEARTBEAT_INTERVAL = 10
@@ -109,17 +112,33 @@ class LibvirtExecutor:
         payload = command["payload"]
         op_id = command["op_id"]
         attacker, target = _attacker_domain(op_id), _target_domain(op_id)
+        defined = []
+        try:
+            return self._allocate_pair(payload, op_id, attacker, target, defined)
+        except Exception:
+            # Best-effort cleanup so failed allocations leave nothing behind.
+            for domain in defined:
+                self.virsh_tolerant("undefine", domain)
+            for domain in (attacker, target):
+                disk = self.disks_dir / f"{domain}.qcow2"
+                if disk.exists():
+                    disk.unlink()
+            raise
+
+    def _allocate_pair(self, payload, op_id, attacker, target, defined):
         existing_state = self._saved_state(op_id)
         if existing_state:
             # Resume saved execution state rather than a fresh boot (§12).
-            self.virsh("restore", str(existing_state / "attacker.save")) if (existing_state / "attacker.save").exists() else None
-            self.virsh("restore", str(existing_state / "target.save")) if (existing_state / "target.save").exists() else None
+            if (existing_state / "attacker.save").exists():
+                self.virsh("restore", str(existing_state / "attacker.save"))
+            if (existing_state / "target.save").exists():
+                self.virsh("restore", str(existing_state / "target.save"))
             return {"domains": [attacker, target], "resumed": True}
         template = self.images_dir / "attacker"
         target_template = self.images_dir / "target"
         for name, directory in ((attacker, template), (target, target_template)):
             domain_xml = directory / "domain.xml"
-            disk_source = self._disk_for(command, name)
+            disk_source = self.disks_dir / f"{name}.qcow2"
             if not domain_xml.exists():
                 raise AgentError(f"missing pinned template: {domain_xml} (template content is owner-supplied)")
             xml = domain_xml.read_text().replace("@DISK@", str(disk_source)).replace("@NAME@", name)
@@ -127,11 +146,9 @@ class LibvirtExecutor:
             xml_path.write_text(xml)
             self._ensure_disk(disk_source, directory / "disk-template", payload)
             self.virsh("define", str(xml_path))
+            defined.append(name)
             self.virsh("start", name)
         return {"domains": [attacker, target], "resumed": False}
-
-    def _disk_for(self, command, domain):
-        return self.disks_dir / f"{domain}.qcow2"
 
     def _ensure_disk(self, source, template_disk, payload):
         """Per-instance writable disk backed by the versioned base image (§10)."""
@@ -230,7 +247,7 @@ class ControllerClient:
 
 def collect_resources(config, running_labs=0):
     images = Path(config["images_dir"])
-    usage = shutil.disk_usage(images if images.exists() else Path("/var/lib/ctf/agent"))
+    usage = shutil.disk_usage(images if images.exists() else Path("/var/lib/libvirt/images/ctf"))
     meminfo = {}
     for line in Path("/proc/meminfo").read_text().splitlines():
         key, _, rest = line.partition(":")
