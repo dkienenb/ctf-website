@@ -1,0 +1,39 @@
+{% extends "base.html" %}
+{% block title %}Edit question — Administration{% endblock %}
+{% block content %}
+<p><a href="{% url 'manage' %}">← Back to administration</a></p>
+<h1>Edit question</h1>
+<p class="muted small">{{ question.challenge.title }} · generation {{ question.generation }}. Corrections use the earliest newly correct submission's original timestamp. Removed records remain private audit history.</p>
+<section class="panel">
+  <form method="post">
+    {% csrf_token %}
+    {{ form.as_p }}
+    {% if preview %}
+      <input type="hidden" name="expected_revision" value="{{ preview.revision }}">
+    {% endif %}
+    <button class="btn primary" type="submit" name="preview" value="1">Preview impact</button>
+  </form>
+</section>
+{% if preview %}
+<section class="panel">
+  <h2>Impact preview</h2>
+  <p>{{ preview.message }} · {{ preview.active_attempts_after }} counted submissions remain after · generation after: {{ preview.generation_after }}.</p>
+  {% for effect in preview.effects %}
+    <div class="row">
+      <div><strong>User #{{ effect.user_id }}</strong>
+        <span class="muted small">{{ effect.attempts_before }}→{{ effect.attempts_after }} attempts · {{ effect.correct_before }}→{{ effect.correct_after }} correct</span></div>
+      <span>{{ effect.earned_before }} → {{ effect.earned_after }} pts ({{ effect.score_delta }})</span>
+    </div>
+  {% empty %}<p>No accounts change scoring or active history.</p>{% endfor %}
+  <form method="post">
+    {% csrf_token %}
+    {% for field in form %}
+      {{ field.as_hidden }}
+    {% endfor %}
+    <input type="hidden" name="expected_revision" value="{{ preview.revision }}">
+    <button class="btn primary" type="submit" name="apply" value="1">Apply this revision</button>
+  </form>
+  <p class="muted small">Any intervening data change requires a new preview.</p>
+</section>
+{% endif %}
+{% endblock %}

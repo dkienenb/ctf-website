@@ -1,0 +1,29 @@
+{% extends "base.html" %}
+{% block title %}Edit content — Administration{% endblock %}
+{% block content %}
+<p><a href="{% url 'manage' %}">← Back to administration</a></p>
+<h1>Edit / preview content</h1>
+<p class="muted small">Existing labs retain their pinned templates. Content edits use the data-revision guard.</p>
+<section class="panel">
+  <form method="post">
+    {% csrf_token %}
+    {{ form.as_p }}
+    <button class="btn primary" type="submit">Save content</button>
+  </form>
+</section>
+<section class="panel">
+  <h2>Attachments</h2>
+  {% for attachment in challenge.attachments.all %}
+    <div class="row">
+      <div><strong>{{ attachment.filename }}</strong> <span class="muted small">{{ attachment.size }} bytes</span></div>
+      <a class="btn small secondary" href="{% url 'attachment-download' challenge.slug attachment.id %}">Download</a>
+    </div>
+  {% empty %}<p>No attachments.</p>{% endfor %}
+  <form method="post" action="{% url 'manage-attachment-upload' challenge.id %}" enctype="multipart/form-data" class="filters">
+    {% csrf_token %}
+    {{ upload_form.file }}
+    <button class="btn secondary" type="submit">Upload attachment</button>
+  </form>
+  <p class="muted small">Attachment text may contain the answer players must discover; files are served only through the permission-checked download view.</p>
+</section>
+{% endblock %}

@@ -1,0 +1,94 @@
+{% extends "base.html" %}
+{% block title %}Administration — CTF Practice{% endblock %}
+{% block content %}
+<h1>Administration</h1>
+<p class="muted">Operator workbench. All actions are authorized by the admin flag, revision-guarded where applicable, and recorded in the audit log.</p>
+
+<section class="panel">
+  <h2>Accounts &amp; approvals</h2>
+  <form method="post" action="{% url 'manage-preapprove' %}" class="filters">
+    {% csrf_token %}
+    {{ preapprove_form.discord_id }}
+    <button class="btn secondary" type="submit">Pre-approve ID</button>
+  </form>
+  <p class="muted small">{{ preapprovals|length }} recent approval records. Pre-approval requires no existing account.</p>
+  {% for account in users %}
+    <div class="row">
+      <div><strong>{{ account.cached_name|default:account.discord_id }}</strong> {% if account.is_admin %}<span class="badge">Admin</span>{% endif %}
+        <span class="muted small">{{ account.discord_id }} · {{ account.status }}</span></div>
+      <div class="button-row">
+        {% if account.status != 'approved' and account.status != 'suspended' %}
+          <form method="post" action="{% url 'manage-action' %}">{% csrf_token %}<input type="hidden" name="action" value="approve"><input type="hidden" name="target" value="{{ account.id }}"><button class="btn small" type="submit">Approve</button></form>
+        {% endif %}
+        {% if account.status == 'pending' %}
+          <form method="post" action="{% url 'manage-action' %}">{% csrf_token %}<input type="hidden" name="action" value="reject"><input type="hidden" name="target" value="{{ account.id }}"><button class="btn small" type="submit">Reject</button></form>
+        {% endif %}
+        {% if account.status != 'suspended' and account.id != user.id %}
+          <form method="post" action="{% url 'manage-action' %}">{% csrf_token %}<input type="hidden" name="action" value="suspend"><input type="hidden" name="target" value="{{ account.id }}"><button class="btn small danger" type="submit">Suspend</button></form>
+        {% endif %}
+      </div>
+    </div>
+  {% endfor %}
+</section>
+
+<section class="panel">
+  <h2>Questions &amp; correction previews</h2>
+  {% for question in questions %}
+    <div class="row">
+      <div><strong>{{ question.prompt|truncatechars:70 }}</strong>
+        <span class="muted small">{{ question.challenge.title }} · {{ question.points }} pts · generation {{ question.generation }}</span></div>
+      <a class="btn small secondary" href="{% url 'manage-question-edit' question.id %}">Edit &amp; preview</a>
+    </div>
+  {% endfor %}
+</section>
+
+<section class="panel">
+  <h2>Hints</h2>
+  {% for item in hints %}
+    <div class="row">
+      <div><strong>{{ item.hint.description }}</strong>
+        <span class="muted small">{{ item.hint.challenge.title }} · {{ item.hint.cost }} pts · {{ item.owners }} owner(s)</span></div>
+      <div class="button-row">
+        <a class="btn small secondary" href="{% url 'manage-hint-edit' item.hint.id %}">Change price</a>
+        {% if item.owners == 0 %}
+          <form method="post" action="{% url 'manage-action' %}">{% csrf_token %}<input type="hidden" name="action" value="delete-hint"><input type="hidden" name="target" value="{{ item.hint.id }}"><button class="btn small danger" type="submit">Delete</button></form>
+        {% else %}
+          <form method="post" action="{% url 'manage-action' %}">{% csrf_token %}<input type="hidden" name="action" value="refund"><input type="hidden" name="target" value="{{ item.first_owner_id }}:{{ item.hint.id }}"><button class="btn small" type="submit">Refund first owner</button></form>
+        {% endif %}
+      </div>
+    </div>
+  {% endfor %}
+  <p class="muted small">Redeemed hints are refundable, never deletable. Refund targets the first owner; the hint edit page lists every owner's score effect.</p>
+</section>
+
+<section class="panel">
+  <h2>Content publishing</h2>
+  <form method="post" action="{% url 'manage-create-challenge' %}" class="stack-form">
+    {% csrf_token %}
+    <div class="filters">{{ create_form.title }} {{ create_form.pool }}</div>
+    {{ create_form.description }}
+    {{ create_form.prompt }}
+    {{ create_form.answer }}
+    {{ create_form.points }}
+    <button class="btn secondary" type="submit">Create draft</button>
+  </form>
+  {% for challenge in challenges %}
+    <div class="row">
+      <div><strong>{{ challenge.title }}</strong>
+        <span class="muted small">{{ challenge.lifecycle }}{% if challenge.go_live %} · go-live {{ challenge.go_live|date:"Y-m-d H:i" }}{% endif %}</span></div>
+      <div class="button-row">
+        <a class="btn small secondary" href="{% url 'manage-content-edit' challenge.id %}">Edit / preview</a>
+        {% if challenge.lifecycle != 'published' %}
+          <form method="post" action="{% url 'manage-action' %}">{% csrf_token %}<input type="hidden" name="action" value="publish"><input type="hidden" name="target" value="{{ challenge.id }}"><button class="btn small" type="submit">Publish now</button></form>
+        {% endif %}
+        {% if challenge.lifecycle != 'archived' %}
+          <form method="post" action="{% url 'manage-action' %}">{% csrf_token %}<input type="hidden" name="action" value="archive"><input type="hidden" name="target" value="{{ challenge.id }}"><button class="btn small" type="submit">Archive</button></form>
+        {% endif %}
+        {% if challenge.lifecycle == 'draft' %}
+          <form method="post" action="{% url 'manage-action' %}">{% csrf_token %}<input type="hidden" name="action" value="delete-draft"><input type="hidden" name="target" value="{{ challenge.id }}"><button class="btn small danger" type="submit">Delete draft</button></form>
+        {% endif %}
+      </div>
+    </div>
+  {% endfor %}
+</section>
+{% endblock %}

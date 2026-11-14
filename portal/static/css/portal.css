@@ -34,6 +34,9 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 .btn { display: inline-flex; align-items: center; gap: 8px; min-height: 40px; padding: 9px 15px; border-radius: 7px; border: 1px solid var(--line); background: var(--panel-hover); font-size: 13px; }
 .btn.primary { background: var(--lime); border-color: var(--lime); color: #12130f; font-weight: 600; }
 .btn.secondary { background: transparent; color: var(--text); }
+.btn.danger { color: var(--danger); border-color: #e8908c55; }
+.button-row { display: flex; gap: 8px; flex-wrap: wrap; }
+.stack-form { display: flex; flex-direction: column; gap: 10px; max-width: 560px; }
 .btn.small { min-height: 32px; padding: 5px 10px; font-size: 12px; }
 .btn:hover { filter: brightness(1.08); }
 

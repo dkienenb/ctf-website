@@ -31,3 +31,18 @@ def approved_page(view):
         return view(request, *args, **kwargs)
 
     return wrapped
+
+
+def admin_page(view):
+    """Operator pages: approved + admin flag (approval never confers admin)."""
+    @wraps(view)
+    def wrapped(request, *args, **kwargs):
+        if not request.user.is_authenticated:
+            return redirect("discord_login")
+        if request.user.status != User.Status.APPROVED:
+            return redirect("status")
+        if not request.user.is_admin:
+            return redirect("home")
+        return view(request, *args, **kwargs)
+
+    return wrapped

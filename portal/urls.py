@@ -5,6 +5,7 @@ from django.views.generic import TemplateView
 from portal.apps.accounts import views as account_views
 from portal.apps.content import views as content_views
 from portal.apps.submissions import views as submission_views
+from portal.apps.submissions import manage_views
 
 urlpatterns = [
     path("admin/", admin.site.urls),
@@ -35,4 +36,12 @@ urlpatterns = [
     path("progress/", submission_views.progress, name="progress"),
     path("notifications/", submission_views.notifications, name="notifications"),
     path("notifications/read", submission_views.mark_notifications_read, name="notifications-read"),
+    path("manage/", manage_views.dashboard, name="manage"),
+    path("manage/questions/<int:question_id>/edit", manage_views.question_edit, name="manage-question-edit"),
+    path("manage/hints/<int:hint_id>/edit", manage_views.hint_edit, name="manage-hint-edit"),
+    path("manage/challenges/<int:challenge_id>/edit", manage_views.content_edit, name="manage-content-edit"),
+    path("manage/challenges/<int:challenge_id>/attachments/upload", manage_views.upload_attachment, name="manage-attachment-upload"),
+    path("manage/challenges/create", manage_views.create_challenge, name="manage-create-challenge"),
+    path("manage/action", manage_views.action, name="manage-action"),
+    path("manage/preapprove", manage_views.preapprove_action, name="manage-preapprove"),
 ]

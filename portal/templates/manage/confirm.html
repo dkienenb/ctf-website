@@ -1,0 +1,16 @@
+{% extends "base.html" %}
+{% block title %}Confirm — Administration{% endblock %}
+{% block content %}
+<h1>{{ title }}</h1>
+<section class="panel">
+  <p>{{ text }}</p>
+  <form method="post" action="{% url 'manage-action' %}">
+    {% csrf_token %}
+    <input type="hidden" name="action" value="{{ action }}">
+    <input type="hidden" name="target" value="{{ target }}">
+    <input type="hidden" name="confirm" value="1">
+    <button class="btn primary" type="submit">Confirm</button>
+    <a class="btn secondary" href="{% url 'manage' %}">Cancel</a>
+  </form>
+</section>
+{% endblock %}

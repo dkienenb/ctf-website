@@ -40,7 +40,7 @@ class LabInstance(models.Model):
 
     user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="labs")
     challenge = models.ForeignKey("content.Challenge", on_delete=models.PROTECT, related_name="labs")
-    template = models.ForeignKey(LabTemplate, on_delete=models.PROTECT, related_name="instances")
+    template = models.ForeignKey(LabTemplate, null=True, on_delete=models.PROTECT, related_name="instances")
     host = models.CharField(max_length=100, blank=True)  # Original workhorse; placement resumes here initially.
     state = models.CharField(max_length=20, default="saved")  # Baseline state enumeration §18.
     generation = models.PositiveBigIntegerField(default=1)
