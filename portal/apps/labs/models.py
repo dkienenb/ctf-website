@@ -30,6 +30,7 @@ class Host(models.Model):
     free_ram_gb = models.FloatField(default=0)
     total_ram_gb = models.FloatField(default=0)
     running_labs = models.PositiveSmallIntegerField(default=0)
+    management_ip = models.GenericIPAddressField(null=True, blank=True)  # Reported by the agent heartbeat.
 
     class Meta:
         db_table = "labs_host"

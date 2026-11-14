@@ -185,6 +185,3 @@ DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 # Guacamole signed-JSON auth (handoff §16): 128-bit hex secret shared with
 # the guacamole container's JSON_SECRET_KEY.
 GUACAMOLE_JSON_SECRET = env("GUACAMOLE_JSON_SECRET", "")
-# Where guacd finds the attacker VM's VNC listener: the workhorse's LAN
-# address (server-side configuration; players never choose destinations).
-GUACAMOLE_VNC_HOST = env("GUACAMOLE_VNC_HOST", "host.docker.internal")

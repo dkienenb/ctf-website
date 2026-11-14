@@ -53,11 +53,16 @@ def _sign_and_encrypt(payload_bytes, key):
     return encryptor.update(padded) + encryptor.finalize()
 
 
-def issue_grant(user, lab, *, vnc_port="5900"):
+def issue_grant(user, lab, *, vnc_port=None):
     """A grant valid five minutes, permitting only this lab's attacker desktop.
-    The VNC host is a server-side setting (the workhorse's address); players
-    never supply connection destinations."""
-    vnc_host = settings.GUACAMOLE_VNC_HOST
+
+    Routes through the guacd instance co-located on the lab's workhorse
+    (per-connection guacd parameters), and reaches the guest's VNC over that
+    host's loopback. All destinations are server-derived from the lab record."""
+    if not lab.host or not lab.host.management_ip:
+        raise GrantError("The lab's workhorse has not reported its management address yet.")
+    vnc_host = "127.0.0.1"
+    vnc_port = str(vnc_port if vnc_port is not None else vnc_port_for(lab))
     payload = {
         "username": user.discord_id,
         "expires": int(time.time() * 1000) + GRANT_TTL_MS,
@@ -65,7 +70,13 @@ def issue_grant(user, lab, *, vnc_port="5900"):
             f"lab-{lab.id}": {
                 "id": f"lab-{lab.id}",
                 "protocol": "vnc",
-                "parameters": {"hostname": vnc_host, "port": vnc_port},
+                "parameters": {
+                    "hostname": vnc_host,
+                    "port": vnc_port,
+                    "guacd-hostname": lab.host.management_ip,
+                    "guacd-port": "4822",
+                    "guacd-encryption": "",
+                },
             }
         },
     }

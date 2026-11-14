@@ -54,9 +54,12 @@ def heartbeat(request):
         except (TypeError, ValueError):
             pass
     host.running_labs = int(payload.get("running_labs", host.running_labs) or 0)
+    management_ip = str(payload.get("management_ip", "") or "")
+    if management_ip:
+        host.management_ip = management_ip
     host.save(update_fields=(
         "last_heartbeat", "agent_version", "free_disk_gb", "total_disk_gb",
-        "free_ram_gb", "total_ram_gb", "running_labs",
+        "free_ram_gb", "total_ram_gb", "running_labs", "management_ip",
     ))
     # Reconcile: hand the agent its acknowledged deadlines for local
     # enforcement when the controller link drops (§18).

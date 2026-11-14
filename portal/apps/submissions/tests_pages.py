@@ -118,7 +118,8 @@ class PageFlowTests(TestCase):
         with override_settings(GUACAMOLE_JSON_SECRET=secret):
             from portal.apps.labs import guacamole
 
-            url = guacamole.issue_grant(user, __import__("types").SimpleNamespace(id=1))
+            url = guacamole.issue_grant(user, __import__("types").SimpleNamespace(
+                id=1, host=__import__("types").SimpleNamespace(management_ip="10.0.0.5")))
         from urllib.parse import unquote
 
         data = unquote(url.split("data=")[1])
@@ -135,7 +136,10 @@ class PageFlowTests(TestCase):
         self.assertGreater(payload["expires"], 0)
         connection = list(payload["connections"].values())[0]
         self.assertEqual(connection["protocol"], "vnc")
-        self.assertEqual(connection["parameters"]["port"], "5900")
+        self.assertEqual(connection["parameters"]["hostname"], "127.0.0.1")  # guest VNC: host-local
+        self.assertEqual(connection["parameters"]["port"], "5901")           # 5900 + (lab.id % 1000)
+        self.assertEqual(connection["parameters"]["guacd-hostname"], "10.0.0.5")  # the lab's workhorse
+        self.assertEqual(connection["parameters"]["guacd-port"], "4822")
 
     def test_desktop_route_is_not_shadowed_by_lab_actions(self):
         """Regression: 'desktop' matched the <str:action> catch-all and its

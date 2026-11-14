@@ -135,6 +135,12 @@ def request_lab(user, challenge_id):
         return {"message": "Queued. Your saved lab is retained."}
 
 
+def vnc_port_for(lab):
+    """Deterministic per-lab VNC port: no collisions between concurrent labs
+    on one host, derivable identically by agent and controller."""
+    return 5900 + (lab.id % 1000)
+
+
 def claim(user, challenge_id):
     """Start allocation: issue the durable `allocate` command. The lease starts
     only when the agent reports both guests ready."""
@@ -157,6 +163,7 @@ def claim(user, challenge_id):
         _issue_command(lab, "allocate", {
             "lab": lab.id,
             "challenge": lab.challenge_id,
+            "vnc_port": vnc_port_for(lab),
             "attacker_version": template.attacker_version if template else "",
             "target_version": template.target_version if template else "",
             "attacker": {"ram_mb": template.attacker_ram_mb if template else 4096,

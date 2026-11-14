@@ -4,3 +4,6 @@ host_name = "workhorse-01"
 token = "PASTE-TOKEN-FROM-register_host"
 images_dir = "/var/lib/libvirt/images/ctf/images"
 disks_dir = "/var/lib/libvirt/images/ctf/disks"
+# This host's management LAN address (reported to the controller; used to
+# route desktop connections to this host's guacd).
+management_ip = "192.0.2.10"

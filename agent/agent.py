@@ -134,6 +134,7 @@ class LibvirtExecutor:
             return {"domains": [attacker, target], "resumed": True}
         template = self.images_dir / "attacker"
         target_template = self.images_dir / "target"
+        vnc_port = str(payload.get("vnc_port", "5900"))
         for name, directory, role in ((attacker, template, "attacker"), (target, target_template, "target")):
             domain_xml = directory / "domain.xml"
             disk_source = self.disks_dir / f"{name}.qcow2"
@@ -150,14 +151,17 @@ class LibvirtExecutor:
                     continue
                 self.virsh_tolerant("destroy", name)
                 self.virsh_tolerant("undefine", name)
-            xml = domain_xml.read_text().replace("@DISK@", str(disk_source)).replace("@NAME@", name)
+            xml = (domain_xml.read_text()
+                   .replace("@DISK@", str(disk_source))
+                   .replace("@NAME@", name)
+                   .replace("@VNC_PORT@", vnc_port))
             xml_path = self.disks_dir / f"{name}.xml"
             xml_path.write_text(xml)
             self._ensure_disk(disk_source, directory / "disk-template", payload)
             self.virsh("define", str(xml_path))
             defined.append(name)
             self.virsh("start", name)
-        return {"domains": [attacker, target], "resumed": False}
+        return {"domains": [attacker, target], "resumed": False, "vnc_port": vnc_port}
 
     def domain_state(self, name):
         result = subprocess.run(
@@ -268,6 +272,7 @@ def collect_resources(config, running_labs=0):
         "free_ram_gb": round(meminfo.get("MemAvailable", 0) / 1e6, 2),
         "total_ram_gb": round(meminfo.get("MemTotal", 0) / 1e6, 2),
         "running_labs": running_labs,
+        "management_ip": config.get("management_ip", ""),
     }
 
 
