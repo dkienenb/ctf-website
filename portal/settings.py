@@ -134,8 +134,10 @@ SOCIALACCOUNT_PROVIDERS = {
     }
 }
 
-# No local signup, no password reset: accounts exist only through Discord.
-ACCOUNT_SIGNUP_ENABLED = False
+# Social signups only: account creation happens through Discord first login.
+# ACCOUNT_SIGNUP_ENABLED must stay True for allauth's social auto-signup;
+# local signup is made unreachable by the /accounts/signup/ URL override.
+ACCOUNT_SIGNUP_ENABLED = True
 ACCOUNT_EMAIL_VERIFICATION = "none"
 ACCOUNT_UNIQUE_EMAIL = False
 SOCIALACCOUNT_AUTO_SIGNUP = True

@@ -14,6 +14,8 @@ urlpatterns = [
     # Discord is the only auth path; the stock allauth login view expects a
     # local username field we deliberately do not have.
     path("accounts/login/", RedirectView.as_view(url="/accounts/discord/login/", permanent=False)),
+    # Local signup does not exist; the URL hands out to the portal instead.
+    path("accounts/signup/", RedirectView.as_view(url="/", permanent=False)),
     path("accounts/", include("allauth.urls")),
     path("status/", account_views.status_page, name="status"),
     path("settings/", account_views.settings_page, name="settings"),
