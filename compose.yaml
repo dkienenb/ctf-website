@@ -32,6 +32,7 @@ services:
       DISCORD_CLIENT_SECRET: ${DISCORD_CLIENT_SECRET:-}
       CSRF_TRUSTED_ORIGINS: ${CSRF_TRUSTED_ORIGINS:-}
       GUACAMOLE_JSON_SECRET: ${GUACAMOLE_JSON_SECRET:-}
+      GUACAMOLE_VNC_HOST: ${GUACAMOLE_VNC_HOST:-host.docker.internal}
     depends_on:
       db:
         condition: service_healthy

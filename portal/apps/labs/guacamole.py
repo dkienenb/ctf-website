@@ -53,8 +53,11 @@ def _sign_and_encrypt(payload_bytes, key):
     return encryptor.update(padded) + encryptor.finalize()
 
 
-def issue_grant(user, lab, *, vnc_host="host.docker.internal", vnc_port="5900"):
-    """A grant valid five minutes, permitting only this lab's attacker desktop."""
+def issue_grant(user, lab, *, vnc_port="5900"):
+    """A grant valid five minutes, permitting only this lab's attacker desktop.
+    The VNC host is a server-side setting (the workhorse's address); players
+    never supply connection destinations."""
+    vnc_host = settings.GUACAMOLE_VNC_HOST
     payload = {
         "username": user.discord_id,
         "expires": int(time.time() * 1000) + GRANT_TTL_MS,
