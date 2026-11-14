@@ -100,6 +100,43 @@ class PageFlowTests(TestCase):
         self.client.force_login(self.pending)
         self.assertEqual(self.client.get("/notifications/poll").status_code, 403)
 
+    def test_guacamole_grant_decrypts_and_verifies(self):
+        """The grant must decrypt (AES-128-CBC, zero IV) into a signed payload
+        whose HMAC matches, per the guacamole-auth-json contract."""
+        import base64
+        import hashlib
+        import hmac
+        import json
+
+        from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
+        from cryptography.hazmat.primitives.padding import PKCS7
+
+        from portal.apps.labs.guacamole import issue_grant
+
+        user = make_user("700000000000000001", "Grant")
+        secret = "ab" * 16
+        with override_settings(GUACAMOLE_JSON_SECRET=secret):
+            from portal.apps.labs import guacamole
+
+            url = guacamole.issue_grant(user, __import__("types").SimpleNamespace(id=1))
+        from urllib.parse import unquote
+
+        data = unquote(url.split("data=")[1])
+        key = bytes.fromhex(secret)
+        decryptor = Cipher(algorithms.AES(key), modes.CBC(b"\x00" * 16)).decryptor()
+        padded = base64.b64decode(data)
+        unpadder = PKCS7(128).unpadder()
+        raw = unpadder.update(decryptor.update(padded) + decryptor.finalize()) + unpadder.finalize()
+        signature, payload_bytes = raw[:32], raw[32:]
+        expected = hmac.new(key, payload_bytes, hashlib.sha256).digest()
+        self.assertTrue(hmac.compare_digest(expected, signature))
+        payload = json.loads(payload_bytes)
+        self.assertEqual(payload["username"], user.discord_id)
+        self.assertGreater(payload["expires"], 0)
+        connection = list(payload["connections"].values())[0]
+        self.assertEqual(connection["protocol"], "vnc")
+        self.assertEqual(connection["parameters"]["port"], "5900")
+
     def test_desktop_route_is_not_shadowed_by_lab_actions(self):
         """Regression: 'desktop' matched the <str:action> catch-all and its
         @require_POST, so the GET to open the desktop returned 405."""

@@ -79,6 +79,7 @@ services:
       POSTGRESQL_USER: guacamole
       POSTGRESQL_PASSWORD: ${GUACAMOLE_DB_PASSWORD:-guacpw}
       JSON_SECRET_KEY: ${GUACAMOLE_JSON_SECRET:-}
+      LOGBACK_LEVEL: info
     volumes:
       - ./guac/extensions:/root/.guacamole/extensions:ro
 
