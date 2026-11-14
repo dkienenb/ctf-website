@@ -21,7 +21,11 @@ ALLOWED_HOSTS = [h for h in env("DJANGO_ALLOWED_HOSTS", "localhost,127.0.0.1").s
 
 # The public Worker/proxy path forwards to this application; never trust
 # arbitrary Host headers. Behind the tunnel Caddy binds a specific host/port.
+# The public Worker proxy sends X-Forwarded-Host/Proto; honor them so Django
+# sees the public hostname for redirects, CSRF, and OAuth callback URLs.
 SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
+USE_X_FORWARDED_HOST = True
+CSRF_TRUSTED_ORIGINS = [o for o in env("CSRF_TRUSTED_ORIGINS", "").split(",") if o]
 CSRF_COOKIE_HTTPONLY = False  # allauth/JS may need to read the token
 SESSION_COOKIE_HTTPONLY = True
 SESSION_COOKIE_SAMESITE = "Lax"

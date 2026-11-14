@@ -1,7 +1,12 @@
 name = "ctf-portal-proxy"
 main = "index.js"
-compatibility_date = "2026-01-01"
+compatibility_date = "2026-11-14"
+
+[[vpc_services]]
+binding = "GATEWAY"
+service_id = "01a1db89-8030-7a33-85a3-5c5a1b1d08ce"
+remote = true
 
 [vars]
-# Set to the private gateway hostname bound through the Tunnel/VPC service.
-ORIGIN_HOST = "gateway.internal"
+ORIGIN_HOST = "172.20.201.125"
+ORIGIN_PORT = "8090"
