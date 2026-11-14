@@ -1,0 +1,37 @@
+<domain type='kvm'>
+  <!-- Demo attacker template. The agent replaces @NAME@ and @DISK@ -->
+  <!-- per allocation. Replace this whole template with the real -->
+  <!-- owner-supplied Kali template before launch (handoff §13). -->
+  <name>@NAME@</name>
+  <memory unit='MiB'>1024</memory>
+  <currentMemory unit='MiB'>1024</currentMemory>
+  <vcpu placement='static'>1</vcpu>
+  <os>
+    <type arch='x86_64' machine='q35'>hvm</type>
+    <boot dev='cdrom'/>
+    <boot dev='hd'/>
+  </os>
+  <features><acpi/><apic/></features>
+  <clock offset='utc'/>
+  <devices>
+    <disk type='file' device='disk'>
+      <driver name='qemu' type='qcow2'/>
+      <source file='@DISK@'/>
+      <target dev='vda' bus='virtio'/>
+    </disk>
+    <disk type='file' device='cdrom'>
+      <driver name='qemu' type='raw'/>
+      <source file='/var/lib/ctf/agent/images/attacker/demo.iso'/>
+      <target dev='sdc' bus='sata'/>
+      <readonly/>
+    </disk>
+    <interface type='network'>
+      <source network='ctf-demo-lab'/>
+    </interface>
+    <console type='pty'>
+      <target type='serial' port='0'/>
+    </console>
+    <graphics type='vnc' autoport='yes' listen='127.0.0.1'/>
+    <memballoon model='virtio'/>
+  </devices>
+</domain>

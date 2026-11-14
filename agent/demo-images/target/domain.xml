@@ -1,0 +1,37 @@
+<domain type='kvm'>
+  <!-- Demo target template. The agent replaces @NAME@ and @DISK@ -->
+  <!-- per allocation. Replace with the real vulnerable-target template -->
+  <!-- before launch (handoff §13; target boot does not expose the host). -->
+  <name>@NAME@</name>
+  <memory unit='MiB'>512</memory>
+  <currentMemory unit='MiB'>512</currentMemory>
+  <vcpu placement='static'>1</vcpu>
+  <os>
+    <type arch='x86_64' machine='q35'>hvm</type>
+    <boot dev='cdrom'/>
+    <boot dev='hd'/>
+  </os>
+  <features><acpi/><apic/></features>
+  <clock offset='utc'/>
+  <devices>
+    <disk type='file' device='disk'>
+      <driver name='qemu' type='qcow2'/>
+      <source file='@DISK@'/>
+      <target dev='vda' bus='virtio'/>
+    </disk>
+    <disk type='file' device='cdrom'>
+      <driver name='qemu' type='raw'/>
+      <source file='/var/lib/ctf/agent/images/target/demo.iso'/>
+      <target dev='sdc' bus='sata'/>
+      <readonly/>
+    </disk>
+    <interface type='network'>
+      <source network='ctf-demo-lab'/>
+    </interface>
+    <console type='pty'>
+      <target type='serial' port='0'/>
+    </console>
+    <graphics type='vnc' autoport='yes' listen='127.0.0.1'/>
+    <memballoon model='virtio'/>
+  </devices>
+</domain>
