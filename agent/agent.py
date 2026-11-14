@@ -134,11 +134,22 @@ class LibvirtExecutor:
             return {"domains": [attacker, target], "resumed": True}
         template = self.images_dir / "attacker"
         target_template = self.images_dir / "target"
-        for name, directory in ((attacker, template), (target, target_template)):
+        for name, directory, role in ((attacker, template, "attacker"), (target, target_template, "target")):
             domain_xml = directory / "domain.xml"
             disk_source = self.disks_dir / f"{name}.qcow2"
             if not domain_xml.exists():
                 raise AgentError(f"missing pinned template: {domain_xml} (template content is owner-supplied)")
+            if self.domain_exists(name):
+                # Same lab's own guest surviving from a scoped recovery (§13):
+                # the attacker workspace is preserved as-is; the target is
+                # always rebuilt because no direct target access is allowed.
+                if role == "attacker":
+                    state = self.domain_state(name)
+                    if state != "running":
+                        self.virsh("start", name)
+                    continue
+                self.virsh_tolerant("destroy", name)
+                self.virsh_tolerant("undefine", name)
             xml = domain_xml.read_text().replace("@DISK@", str(disk_source)).replace("@NAME@", name)
             xml_path = self.disks_dir / f"{name}.xml"
             xml_path.write_text(xml)
@@ -147,6 +158,13 @@ class LibvirtExecutor:
             defined.append(name)
             self.virsh("start", name)
         return {"domains": [attacker, target], "resumed": False}
+
+    def domain_state(self, name):
+        result = subprocess.run(
+            ["virsh", "--connect", self.uri, "domstate", name],
+            capture_output=True, text=True, timeout=60,
+        )
+        return result.stdout.strip().lower() if result.returncode == 0 else "unknown"
 
     def _ensure_disk(self, source, template_disk, payload):
         """Per-instance writable disk backed by the versioned base image (§10)."""

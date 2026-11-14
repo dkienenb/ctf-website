@@ -213,3 +213,26 @@ class AgentExecutorTests(TestCase):
             workhorse_agent.execute(executor, save_command)
             saves = [call[1] for call in executor.calls if call[0] == "save"]
             self.assertEqual(sorted(saves), ["ctf-lab7-atk", "ctf-lab7-tgt"])
+
+    def test_allocate_reuses_preserved_attacker_and_rebuilds_target(self):
+        """After a target-scoped recovery, a running attacker VM is preserved
+        (§13) and only the target is rebuilt (no direct target access)."""
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmp:
+            executor = self._executor(tmp)
+            executor.existing = set()
+            executor.domain_state = lambda name: "running" if name in executor.existing else "unknown"
+            for role in ("attacker", "target"):
+                directory = executor.images_dir / role
+                directory.mkdir(parents=True)
+                (directory / "domain.xml").write_text("<domain><name>@NAME@</name><disk>@DISK@</disk></domain>")
+            executor.existing = {"ctf-lab9-atk"}
+            command = {"op_id": "op-x", "operation": "allocate", "payload": {"lab": 9}, "lab": 9}
+            detail = workhorse_agent.execute(executor, command)
+            self.assertFalse(detail["resumed"])
+            defines = [call[1] for call in executor.calls if call[0] == "define"]
+            self.assertNotIn("ctf-lab9-atk", defines)  # attacker preserved, not redefined
+            self.assertIn("ctf-lab9-tgt", defines)    # target rebuilt
+            started = [call[1] for call in executor.calls if call[0] == "start"]
+            self.assertNotIn("ctf-lab9-atk", started)  # already running
