@@ -123,7 +123,7 @@ class AgentExecutorTests(TestCase):
                 self.calls.append(args)
 
             def domain_exists(self, name):
-                return False
+                return name in getattr(self, "existing", set())
 
             def _ensure_disk(self, source, template_disk, payload):
                 source.parent.mkdir(parents=True, exist_ok=True)
