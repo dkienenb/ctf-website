@@ -5,3 +5,4 @@ db.sqlite3
 .env
 instance/
 node_modules/
+private_attachments/

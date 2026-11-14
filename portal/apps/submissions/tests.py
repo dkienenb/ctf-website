@@ -27,13 +27,15 @@ def make_user(discord_id, name, status=User.Status.APPROVED, is_admin=False):
 
 
 def make_question(answers, points=100, pools=(), user=None):
+    import uuid as uuid_lib
+
     challenge = Challenge.objects.create(
         title=f"Challenge {Question.objects.count()}",
-        slug=f"challenge-{Question.objects.count() or 0}-{timezone.now().timestamp()}",
+        slug=f"challenge-{uuid_lib.uuid4().hex[:10]}",
         lifecycle=Challenge.Lifecycle.PUBLISHED,
     )
     for pool_name in pools:
-        pool, _ = Pool.objects.get_or_create(name=pool_name, defaults={"slug": pool_name})
+        pool, _ = Pool.objects.get_or_create(name=pool_name, defaults={"slug": pool_name.lower()})
         PoolChallenge.objects.create(pool=pool, challenge=challenge)
     question = Question.objects.create(challenge=challenge, prompt="Prompt", points=points)
     for answer in answers:

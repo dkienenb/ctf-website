@@ -1,0 +1,32 @@
+{% extends "base.html" %}
+{% block title %}My progress — CTF Practice{% endblock %}
+{% block content %}
+<h1>My progress</h1>
+<section class="panel">
+  <h2>How your score is calculated</h2>
+  <p>Current values of solved questions: <strong>{{ summary.earned }} pts</strong><br>
+     Current prices of owned hints: <strong>−{{ summary.deductions }} pts</strong><br>
+     Overall score: <strong>{{ summary.points }} pts</strong>. Negative totals are allowed.</p>
+  <p class="muted small">Counted attempts: {{ summary.attempts }} · Correct: {{ summary.correct }} · Accuracy: {% if summary.accuracy is None %}—{% else %}{{ summary.accuracy }}%{% endif %}</p>
+</section>
+<section class="panel">
+  <h2>Owned hints</h2>
+  {% for redemption in redemptions %}
+    <div class="row"><div><strong>{{ redemption.hint.description }}</strong> <span class="muted small">{{ redemption.hint.challenge.title }}</span></div><span>−{{ redemption.hint.cost }} pts</span></div>
+  {% empty %}<p>No hints redeemed yet.</p>{% endfor %}
+</section>
+<section class="panel">
+  <h2>Counted submission history</h2>
+  {% for submission in history %}
+    <div class="row">
+      <div>
+        <strong>{{ submission.question.challenge.title }}</strong>
+        <span class="muted small">{{ submission.question.prompt|truncatechars:60 }} · {{ submission.submitted_at|date:"Y-m-d H:i" }}</span>
+        <code>{{ submission.answer }}</code>
+      </div>
+      <span class="badge {% if submission.correct %}badge-solved{% endif %}">{% if submission.correct %}Correct{% else %}Incorrect{% endif %}</span>
+    </div>
+  {% empty %}<p>No counted attempts yet. Rejected repeats and rate-limited requests do not appear here.</p>{% endfor %}
+  <p class="muted small">Removed submissions stay in the private server audit history. They do not appear in this player history.</p>
+</section>
+{% endblock %}

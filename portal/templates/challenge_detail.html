@@ -1,0 +1,65 @@
+{% extends "base.html" %}
+{% load form_tags %}
+{% block title %}{{ challenge.title }} — CTF Practice{% endblock %}
+{% block content %}
+<p><a href="{% url 'home' %}">← Back to challenges</a></p>
+<h1>{{ challenge.title }}</h1>
+<div class="pool-links">
+  {% for membership_pool in pools %}<a class="pool-link" href="{% url 'pool' membership_pool.slug %}">{{ membership_pool.name }}</a>{% endfor %}
+</div>
+<section class="panel">
+  <h2>Challenge brief</h2>
+  <p>{{ challenge.description }}</p>
+  {% for attachment in challenge.attachments.all %}
+    <a class="btn secondary" href="{% url 'attachment-download' challenge.slug attachment.id %}">Download {{ attachment.filename }}</a>
+  {% endfor %}
+</section>
+<section class="panel">
+  <h2>Questions</h2>
+  {% for item in questions %}
+    <article class="question">
+      <div class="question-head">
+        <h3>{{ item.question.prompt }}</h3>
+        <span class="{% if item.solved %}good{% endif %}">{{ item.question.points }} pts</span>
+      </div>
+      {% if item.question.input_format %}<p class="muted small">Input format: <code>{{ item.question.input_format }}</code></p>{% endif %}
+      {% if item.solved %}
+        <p class="good">Solved · {{ item.solved_at|date:"Y-m-d H:i" }}</p>
+      {% else %}
+        <form method="post" action="{% url 'submit-answer' challenge.slug item.question.id %}" class="answer-form">
+          {% csrf_token %}
+          <input type="hidden" name="request_id" value="{% uuid %}">
+          <input name="answer" placeholder="{% firstof item.question.input_format 'Answer' %}" autocomplete="off" required maxlength="4096" aria-label="Answer: {{ item.question.prompt }}">
+          <button class="btn primary" type="submit">Submit answer</button>
+        </form>
+      {% endif %}
+    </article>
+  {% endfor %}
+</section>
+<section class="panel">
+  <h2>Hints</h2>
+  {% for hint in challenge.hints.all %}
+    <div class="hint-row">
+      <div>
+        <strong>{{ hint.description }}</strong>
+        <span class="muted small">{% if hint.id in owned_hints %}Owned · current deduction{% else %}Unlock for {{ hint.cost }} pts{% endif %}</span>
+      </div>
+      {% if hint.id in owned_hints %}
+        <p class="hint-text">{{ hint.text }}</p>
+      {% else %}
+        <form method="post" action="{% url 'redeem-hint' challenge.slug hint.id %}">
+          {% csrf_token %}
+          <button class="btn secondary" type="submit">Unlock hint</button>
+        </form>
+      {% endif %}
+    </div>
+  {% empty %}<p>No hints in this challenge.</p>{% endfor %}
+  <p class="muted small">Hints can be redeemed at any balance, including after solving. The current price is deducted once, and future price changes apply retroactively.</p>
+</section>
+{% if challenge.lab_template %}
+  <section class="panel">
+    <h2>Your lab</h2>
+    <p class="muted small">Pinned templates: {{ challenge.lab_template.attacker_version }} / {{ challenge.lab_template.target_version }}. Lab allocation arrives with the infrastructure build; questions remain fully usable without a machine.</p>
+  </section>
+{% endif %}
+{% endblock %}

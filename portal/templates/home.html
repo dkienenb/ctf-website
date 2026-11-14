@@ -1,7 +1,36 @@
-{% if user.is_authenticated %}
-  <p>Signed in as {{ user.cached_name }} (Discord ID {{ user.discord_id }}) — status: {{ user.status }}.</p>
-  {% if user.is_approved %}<p>Approved access active.</p>{% endif %}
-  <form method="post" action="{% url 'account_logout' %}">{% csrf_token %}<button type="submit">Sign out</button></form>
-{% else %}
-  <p><a href="{% url 'discord_login' %}">Sign in with Discord</a></p>
-{% endif %}
+{% extends "base.html" %}
+{% block content %}
+<h1>{% if pool %}Pool: {{ pool.name }}{% else %}Challenges{% endif %}</h1>
+<p class="muted">{% if pool %}{{ pool.description }}{% else %}A little curiosity. A little persistence. A whole lot to uncover.{% endif %}</p>
+<form method="get" class="filters">
+  <input type="search" name="q" value="{{ query }}" placeholder="Search challenges…" aria-label="Search challenges">
+  <select name="pool" aria-label="Filter by pool" onchange="this.form.submit()">
+    <option value="">All pools</option>
+    {% for option in pools %}<option value="{{ option.slug }}" {% if pool.slug == option.slug %}selected{% endif %}>{{ option.name }}</option>{% endfor %}
+  </select>
+  <select name="status" aria-label="Filter by status" onchange="this.form.submit()">
+    <option value="all" {% if status == 'all' %}selected{% endif %}>All</option>
+    <option value="solved" {% if status == 'solved' %}selected{% endif %}>Solved</option>
+    <option value="unsolved" {% if status == 'unsolved' %}selected{% endif %}>Unsolved</option>
+  </select>
+  <button class="btn secondary" type="submit">Filter</button>
+</form>
+<div class="grid">
+  {% for row in rows %}
+    <article class="card {% if row.solved %}solved{% endif %}">
+      <div class="card-top">
+        <span class="badge {% if row.solved %}badge-solved{% endif %}">{% if row.solved %}Solved{% elif row.solved_count %}In progress{% else %}Unsolved{% endif %}</span>
+        <span>{{ row.points }} pts</span>
+      </div>
+      <h2><a href="{% url 'challenge_detail' row.challenge.slug %}">{{ row.challenge.title }}</a></h2>
+      <p>{{ row.challenge.summary }}</p>
+      <div class="pool-links">
+        {% for membership_pool in row.pools %}<a class="pool-link" href="{% url 'pool' membership_pool.slug %}">{{ membership_pool.name }}</a>{% endfor %}
+      </div>
+      <p class="muted small">{{ row.solved_count }}/{{ row.total }} questions solved</p>
+    </article>
+  {% empty %}
+    <p>No challenges match.</p>
+  {% endfor %}
+</div>
+{% endblock %}

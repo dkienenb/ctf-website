@@ -1,0 +1,14 @@
+{% extends "base.html" %}
+{% block title %}Account status — CTF Practice{% endblock %}
+{% block content %}
+<h1>{% if user.status == 'suspended' %}Access suspended{% elif user.status == 'rejected' %}Application rejected{% else %}Awaiting approval{% endif %}</h1>
+<p>You are signed in as {{ user.cached_name|default:user.discord_id }}.</p>
+{% if user.status == 'suspended' %}
+  <p>Lab access is revoked. Your question progress and saved state are retained.</p>
+{% elif user.status == 'rejected' %}
+  <p>Your previous application was not approved. Sign out and sign in again to submit a new application. Your progress, if any, is retained.</p>
+{% else %}
+  <p>An administrator must approve your Discord ID ({{ user.discord_id }}) before you can view challenges or rankings.</p>
+{% endif %}
+<p class="muted small">Authentication and approval are separate. Approval does not grant administrator rights.</p>
+{% endblock %}

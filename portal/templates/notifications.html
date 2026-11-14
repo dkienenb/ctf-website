@@ -1,0 +1,14 @@
+{% extends "base.html" %}
+{% block title %}Notifications — CTF Practice{% endblock %}
+{% block content %}
+<h1>Notifications</h1>
+<form method="post" action="{% url 'notifications-read' %}">
+  {% csrf_token %}
+  <button class="btn secondary" type="submit">Mark all read</button>
+</form>
+{% for notification in rows %}
+  <div class="row {% if not notification.read_at %}unread{% endif %}">
+    <div><strong>{{ notification.message }}</strong> <span class="muted small">{{ notification.created_at|date:"Y-m-d H:i" }}</span></div>
+  </div>
+{% empty %}<p>No notifications yet.</p>{% endfor %}
+{% endblock %}

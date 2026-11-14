@@ -1,0 +1,19 @@
+{% extends "base.html" %}
+{% block title %}Settings — CTF Practice{% endblock %}
+{% block content %}
+<h1>Your account</h1>
+<section class="panel">
+  <h2>Discord profile</h2>
+  <p><strong>{{ user.cached_name|default:user.discord_id }}</strong> · Discord ID <code>{{ user.discord_id }}</code></p>
+  <p class="muted small">Cached name and avatar stay unchanged until you explicitly reload them. Your stable Discord ID, ownership, approval, and progress are never affected.</p>
+  <form method="post" action="{% url 'refresh-profile' %}">
+    {% csrf_token %}
+    <button class="btn secondary" type="submit">Reload from Discord</button>
+  </form>
+  {% if user.profile_refreshed_at %}<p class="muted small">Last refresh: {{ user.profile_refreshed_at|date:"Y-m-d H:i" }}</p>{% endif %}
+</section>
+<section class="panel">
+  <h2>Session</h2>
+  <form method="post" action="{% url 'account_logout' %}">{% csrf_token %}<button class="btn secondary" type="submit">Sign out</button></form>
+</section>
+{% endblock %}

@@ -10,7 +10,11 @@ Rules encoded here:
 - Published content enforces go-live timing; archived content keeps scoring.
 """
 from django.conf import settings
+from django.core.files.storage import FileSystemStorage
 from django.db import models
+import os
+
+PRIVATE_ATTACHMENTS_DIR = settings.BASE_DIR / "private_attachments"
 
 
 class Pool(models.Model):
@@ -68,17 +72,33 @@ class PoolChallenge(models.Model):
         constraints = [models.UniqueConstraint(fields=("pool", "challenge"), name="uniq_pool_challenge")]
 
 
+class PrivateAttachmentStorage(FileSystemStorage):
+    """Private application storage (handoff §19): never served directly by
+    any static/web route; downloads go through the permission-checked view."""
+
+    def __init__(self, *args, **kwargs):
+        kwargs.setdefault("location", str(settings.PRIVATE_ATTACHMENTS_DIR))
+        super().__init__(*args, **kwargs)
+
+
 class Attachment(models.Model):
     """Private file served only after server-side approval + visibility checks."""
 
     challenge = models.ForeignKey(Challenge, on_delete=models.CASCADE, related_name="attachments")
     filename = models.CharField(max_length=255)
-    storage_ref = models.CharField(max_length=500)  # Private storage reference; enforce access at view layer.
+    file = models.FileField(storage=PrivateAttachmentStorage(), upload_to="attachments/", null=True, blank=True)
     size = models.PositiveBigIntegerField(default=0)
     uploaded_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
         db_table = "content_attachment"
+
+    def save(self, *args, **kwargs):
+        if self.file and not self.filename:
+            self.filename = os.path.basename(self.file.name)
+        if self.file and not self.size:
+            self.size = self.file.size
+        super().save(*args, **kwargs)
 
 
 class Question(models.Model):

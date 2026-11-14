@@ -1,73 +1,95 @@
-"""JSON API views. Session-authenticated; server-rendered UI consumes these
-directly or via templates in later build steps."""
-import json
+"""Server-rendered pages: leaderboard, progress, notifications, answer + hint actions.
 
-from django.http import JsonResponse
-from django.views.decorators.csrf import csrf_exempt  # JSON+session API interim; CSRF review lands with the UI layer.
-from django.views.decorators.http import require_http_methods
+Replaces the interim JSON API (handoff §14: server-rendered templates). Forms
+carry real CSRF tokens; feedback flows through the messages framework.
+"""
+import uuid
 
-from portal.apps.accounts.decorators import approved_required
-from portal.apps.content.models import Pool
+from django.contrib import messages
+from django.shortcuts import get_object_or_404, redirect, render
+from django.utils import timezone
+
+from portal.apps.accounts.decorators import approved_page
+from portal.apps.content.models import Challenge, Hint, Pool, Question
 
 from . import services
+from .models import Solve, Submission
 
 
-def _body(request):
-    try:
-        data = json.loads(request.body or b"{}")
-    except json.JSONDecodeError:
-        raise services.ServiceError("Invalid JSON body.", 400)
-    if not isinstance(data, dict):
-        raise services.ServiceError("Expected a JSON object.", 400)
-    return data
+def _pool_from_request(request):
+    pool_slug = request.GET.get("pool")
+    if pool_slug and pool_slug != "all":
+        return get_object_or_404(Pool, slug=pool_slug)
+    return None
 
 
-def _handle(request, handler):
-    try:
-        result = handler()
-    except services.ServiceError as error:
-        return JsonResponse({"error": error.message}, status=error.status)
-    return JsonResponse(result)
-
-
-@require_http_methods(["POST"])
-@csrf_exempt
-@approved_required
-def submit(request, question_id):
-    body = _body(request)
-    return _handle(request, lambda: services.submit(
-        request.user, question_id, body.get("answer", ""), body.get("request_id", "")
-    ))
-
-
-@require_http_methods(["POST"])
-@csrf_exempt
-@approved_required
-def redeem(request, hint_id):
-    return _handle(request, lambda: services.redeem(request.user, hint_id))
-
-
-@require_http_methods(["GET"])
-@approved_required
+@approved_page
 def leaderboard(request):
-    pool_id = request.GET.get("pool")
-    pool = None
-    if pool_id and pool_id != "all":
-        try:
-            pool = Pool.objects.get(pk=pool_id)
-        except Pool.DoesNotExist:
-            return JsonResponse({"error": "Pool not found."}, status=404)
-    return JsonResponse({"entries": services.leaderboard(pool)})
+    pool = _pool_from_request(request)
+    return render(request, "leaderboard.html", {
+        "entries": services.leaderboard(pool),
+        "pools": Pool.objects.all(),
+        "pool": pool,
+    })
 
 
-@require_http_methods(["GET"])
-@approved_required
-def me(request):
-    pool_id = request.GET.get("pool")
-    pool = None
-    if pool_id and pool_id != "all":
+@approved_page
+def progress(request):
+    user = request.user
+    overall = services.summary(user)
+    redemptions = user.redemptions.select_related("hint__challenge").order_by("-redeemed_at")
+    history = (
+        Submission.objects.filter(user=user, eligible=True)
+        .select_related("question__challenge")
+        .order_by("-submitted_at", "-id")
+    )
+    return render(request, "progress.html", {
+        "summary": overall,
+        "redemptions": redemptions,
+        "history": history,
+    })
+
+
+@approved_page
+def notifications(request):
+    rows = request.user.notifications.all()[:100]
+    return render(request, "notifications.html", {"rows": rows})
+
+
+@approved_page
+def mark_notifications_read(request):
+    if request.method == "POST":
+        request.user.notifications.filter(read_at__isnull=True).update(read_at=timezone.now())
+        messages.success(request, "Notifications marked read.")
+    return redirect("notifications")
+
+
+@approved_page
+def submit_answer(request, slug, question_id):
+    challenge = get_object_or_404(Challenge, slug=slug)
+    question = get_object_or_404(Question, pk=question_id, challenge=challenge)
+    if request.method == "POST":
+        answer = request.POST.get("answer", "")
+        request_id = request.POST.get("request_id", "") or uuid.uuid4().hex
         try:
-            pool = Pool.objects.get(pk=pool_id)
-        except Pool.DoesNotExist:
-            return JsonResponse({"error": "Pool not found."}, status=404)
-    return JsonResponse(services.summary(request.user, pool))
+            result = services.submit(request.user, question.id, answer, request_id)
+            if result["correct"]:
+                messages.success(request, result["message"])
+            else:
+                messages.info(request, result["message"])
+        except services.ServiceError as error:
+            messages.error(request, error.message)
+    return redirect("challenge_detail", slug=slug)
+
+
+@approved_page
+def redeem_hint(request, slug, hint_id):
+    challenge = get_object_or_404(Challenge, slug=slug)
+    hint = get_object_or_404(Hint, pk=hint_id, challenge=challenge)
+    if request.method == "POST":
+        try:
+            result = services.redeem(request.user, hint.id)
+            messages.success(request, result["message"])
+        except services.ServiceError as error:
+            messages.error(request, error.message)
+    return redirect("challenge_detail", slug=slug)

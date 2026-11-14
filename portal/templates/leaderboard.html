@@ -1,0 +1,28 @@
+{% extends "base.html" %}
+{% block title %}Leaderboards — CTF Practice{% endblock %}
+{% block content %}
+<h1>Leaderboards</h1>
+<p class="muted">Points descending, accuracy descending, then the earlier most-recent counted solve. Complete ties share rank.</p>
+<form method="get" class="filters">
+  <select name="pool" aria-label="Ranking view" onchange="this.form.submit()">
+    <option value="all">Overall · distinct progress</option>
+    {% for option in pools %}<option value="{{ option.slug }}" {% if pool.slug == option.slug %}selected{% endif %}>{{ option.name }}</option>{% endfor %}
+  </select>
+  <noscript><button class="btn secondary" type="submit">Switch view</button></noscript>
+</form>
+<table>
+  <thead><tr><th>Rank</th><th>Explorer</th><th>Accuracy</th><th>Solves</th><th>Points</th></tr></thead>
+  <tbody>
+    {% for entry in entries %}
+      <tr class="{% if entry.id == user.id %}your-row{% endif %}">
+        <td>#{{ entry.rank }}</td>
+        <td>{{ entry.name }}{% if entry.id == user.id %} <span class="badge">You</span>{% endif %}</td>
+        <td>{% if entry.accuracy is None %}—{% else %}{{ entry.accuracy }}%{% endif %}</td>
+        <td>{{ entry.correct }}</td>
+        <td>{{ entry.points }}</td>
+      </tr>
+    {% endfor %}
+  </tbody>
+</table>
+<p class="muted small">Accuracy uses counted submissions only. Hints do not count as attempts. Archived progress is retained; overall scores never add overlapping pool totals.</p>
+{% endblock %}
