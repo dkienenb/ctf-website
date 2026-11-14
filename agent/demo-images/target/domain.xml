@@ -33,7 +33,9 @@
     </console>
     <!-- No desktop on the target: players never receive authenticated direct
          access to the target (handoff §10). Console access is the operator's. -->
-    <graphics type='none'/>
+    <!-- No desktop on the target: players never receive authenticated direct
+         access to the target (handoff §10). Console access is the operator's.
+         To that end, no <graphics> element exists in this template. -->
     <memballoon model='virtio'/>
   </devices>
 </domain>
