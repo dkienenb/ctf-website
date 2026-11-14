@@ -228,7 +228,7 @@ class ControllerClient:
         return self.request(f"/agentapi/commands/{op_id}/result", {"status": status, "result": detail})
 
 
-def collect_resources(config):
+def collect_resources(config, running_labs=0):
     images = Path(config["images_dir"])
     usage = shutil.disk_usage(images if images.exists() else Path("/var/lib/ctf/agent"))
     meminfo = {}
@@ -241,14 +241,14 @@ def collect_resources(config):
         "total_disk_gb": round(usage.total / 1e9, 2),
         "free_ram_gb": round(meminfo.get("MemAvailable", 0) / 1e6, 2),
         "total_ram_gb": round(meminfo.get("MemTotal", 0) / 1e6, 2),
-        "running_labs": 0,  # reconciled with domain count when libvirt is wired to the loop
+        "running_labs": running_labs,
     }
 
 
-def run_once(client, executor, deadlines):
+def run_once(client, executor, config, deadlines):
     """One heartbeat/poll/deadline cycle. Returns handled command count."""
     try:
-        response = client.heartbeat(collect_resources(deadlines_config(deadlines)))
+        response = client.heartbeat(collect_resources(config, len(deadlines)))
         deadlines.update(response.get("lease_deadlines", {}))
     except (urllib.error.URLError, OSError, json.JSONDecodeError):
         pass  # controller link lost; local deadlines still enforced
@@ -269,10 +269,6 @@ def run_once(client, executor, deadlines):
         handled += 1
     enforce_deadlines(client, executor, deadlines)
     return handled
-
-
-def deadlines_config(deadlines):
-    return {"agent_version": "1", "running_labs": len(deadlines)}
 
 
 def enforce_deadlines(client, executor, deadlines):
@@ -296,11 +292,11 @@ def enforce_deadlines(client, executor, deadlines):
 def main():
     config = load_config()
     client = ControllerClient(config)
-    executor = LibvirtExecutor(config["images_dir"], config["disks_dir"])
+    executor = LibvirtExecutor(images_dir=config["images_dir"], disks_dir=config["disks_dir"])
     deadlines = {}
     print(f"agent: host={config['host_name']} controller={client.base}")
     while True:
-        run_once(client, executor, deadlines)
+        run_once(client, executor, config, deadlines)
         time.sleep(POLL_INTERVAL)
 
 
