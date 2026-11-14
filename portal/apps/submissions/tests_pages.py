@@ -4,6 +4,7 @@ from io import BytesIO
 
 from django.core.files.base import ContentFile
 from django.test import TestCase, override_settings
+from django.urls import reverse
 
 from portal.apps.accounts.models import User
 from portal.apps.content.models import Attachment, Challenge, Pool, PoolChallenge, Question, AcceptedAnswer, Hint
@@ -98,6 +99,22 @@ class PageFlowTests(TestCase):
         # Pending users cannot poll (approval is a backend condition).
         self.client.force_login(self.pending)
         self.assertEqual(self.client.get("/notifications/poll").status_code, 403)
+
+    def test_desktop_route_is_not_shadowed_by_lab_actions(self):
+        """Regression: 'desktop' matched the <str:action> catch-all and its
+        @require_POST, so the GET to open the desktop returned 405."""
+        self.client.force_login(self.approved)
+        from portal.apps.labs.models import LabInstance, LabTemplate
+
+        question = make_question(["x"])
+        template = LabTemplate.objects.create(attacker_version="a", target_version="t")
+        question.challenge.lab_template = template
+        question.challenge.save()
+        lab = LabInstance.objects.create(user=self.approved, challenge=question.challenge, state="running")
+        with override_settings(GUACAMOLE_JSON_SECRET="ab" * 16):
+            response = self.client.get(reverse("lab-desktop", args=[question.challenge.slug]))
+        self.assertEqual(response.status_code, 302)
+        self.assertIn("/guacamole/", response["Location"])
 
     def test_idempotent_form_resubmission(self):
         """Double-submitted forms reuse the rendered request id: no extra attempt."""
