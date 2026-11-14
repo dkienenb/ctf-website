@@ -232,7 +232,7 @@ class AgentExecutorTests(TestCase):
             detail = workhorse_agent.execute(executor, command)
             self.assertFalse(detail["resumed"])
             defines = [call[1] for call in executor.calls if call[0] == "define"]
-            self.assertNotIn("ctf-lab9-atk", defines)  # attacker preserved, not redefined
-            self.assertIn("ctf-lab9-tgt", defines)    # target rebuilt
+            self.assertFalse(any("ctf-lab9-atk" in path for path in defines))  # attacker preserved, not redefined
+            self.assertTrue(any("ctf-lab9-tgt" in path for path in defines))   # target rebuilt
             started = [call[1] for call in executor.calls if call[0] == "start"]
             self.assertNotIn("ctf-lab9-atk", started)  # already running
