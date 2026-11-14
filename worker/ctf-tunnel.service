@@ -1,0 +1,18 @@
+# Cloudflare Tunnel connector for the portal (run as root; token-scoped).
+[Unit]
+Description=Cloudflare Tunnel - ctf-portal
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+# Token from: npx wrangler tunnel token e9f325c4-cf7a-46f5-a79b-53eddfc67c8b
+# Store it at /etc/ctf/tunnel-token (chmod 600). This connector reaches ONLY
+# the Caddy gateway target configured in the VPC service - it never exposes
+# the host beyond that.
+ExecStart=/bin/sh -c '/usr/local/bin/cloudflared tunnel --no-autoupdate run --token "$(cat /etc/ctf/tunnel-token)"'
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
