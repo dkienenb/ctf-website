@@ -12,7 +12,13 @@ fi
 
 REPO_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 IMAGES=/var/lib/libvirt/images/ctf/images
+DISKS=/var/lib/libvirt/images/ctf/disks
 ISO_URL="https://dl-cdn.alpinelinux.org/alpine/v3.20/releases/x86_64/alpine-virt-3.20.3-x86_64.iso"
+
+# The agent (ctf-agent) must be able to create per-instance disks here.
+mkdir -p "$IMAGES" "$DISKS"
+chown ctf-agent:ctf-agent /var/lib/libvirt/images/ctf /var/lib/libvirt/images/ctf/images /var/lib/libvirt/images/ctf/disks
+chmod o+x /var/lib/libvirt/images 2>/dev/null || true
 
 for role in attacker target; do
   mkdir -p "$IMAGES/$role"
@@ -52,7 +58,7 @@ fi
 virsh --connect qemu:///system net-autostart ctf-demo-lab
 virsh --connect qemu:///system net-start ctf-demo-lab 2>/dev/null || true
 
-chown -R ctf-agent:ctf-agent /var/lib/libvirt/images/ctf/images
+chown -R ctf-agent:ctf-agent "$IMAGES" "$DISKS"
 
 echo "==> Demo templates ready:"
 virsh --connect qemu:///system net-info ctf-demo-lab | head -2
