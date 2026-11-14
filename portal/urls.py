@@ -42,6 +42,7 @@ urlpatterns = [
     path("leaderboard/", submission_views.leaderboard, name="leaderboard"),
     path("progress/", submission_views.progress, name="progress"),
     path("notifications/", submission_views.notifications, name="notifications"),
+    path("notifications/poll", submission_views.notifications_poll, name="notifications-poll"),
     path("notifications/read", submission_views.mark_notifications_read, name="notifications-read"),
     path("manage/", manage_views.dashboard, name="manage"),
     path("manage/questions/<int:question_id>/edit", manage_views.question_edit, name="manage-question-edit"),

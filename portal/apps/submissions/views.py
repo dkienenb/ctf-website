@@ -6,10 +6,11 @@ carry real CSRF tokens; feedback flows through the messages framework.
 import uuid
 
 from django.contrib import messages
+from django.http import JsonResponse
 from django.shortcuts import get_object_or_404, redirect, render
 from django.utils import timezone
 
-from portal.apps.accounts.decorators import approved_page
+from portal.apps.accounts.decorators import approved_page, approved_required
 from portal.apps.content.models import Challenge, Hint, Pool, Question
 
 from . import services
@@ -54,6 +55,16 @@ def progress(request):
 def notifications(request):
     rows = request.user.notifications.all()[:100]
     return render(request, "notifications.html", {"rows": rows})
+
+
+@approved_required
+def notifications_poll(request):
+    """Lightweight polling endpoint for toast notifications (10s client loop)."""
+    unseen = request.user.notifications.filter(read_at__isnull=True)
+    return JsonResponse({
+        "unread": unseen.count(),
+        "messages": [{"id": row.id, "message": row.message} for row in unseen.order_by("-id")[:5]],
+    })
 
 
 @approved_page

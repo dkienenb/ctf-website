@@ -16,7 +16,7 @@
       <a href="{% url 'pools' %}">Pools</a>
       <a href="{% url 'leaderboard' %}">Leaderboards</a>
       <a href="{% url 'progress' %}">My progress</a>
-      <a href="{% url 'notifications' %}">Notifications</a>
+      <a href="{% url 'notifications' %}">Notifications<span id="notif-badge"></span></a>
       {% if user.is_admin %}<a href="{% url 'manage' %}">Administration</a>{% endif %}
     {% elif user.is_authenticated %}
       <a href="{% url 'status' %}">Account status</a>
@@ -39,5 +39,39 @@
 {% endif %}
 {% block content %}{% endblock %}
 </main>
+{% if user.is_authenticated and user.status == 'approved' %}
+<div class="toast-wrap" id="toast-wrap" aria-live="polite"></div>
+<script>
+  // Toast notifications: lease warnings, saves, approvals, corrections.
+  // Polls a lightweight JSON endpoint every 10 seconds; unseen messages
+  // surface as toasts and feed the nav badge.
+  const seenToasts = new Set();
+  function showToast(message) {
+    const wrap = document.getElementById("toast-wrap");
+    const node = document.createElement("div");
+    node.className = "toast";
+    node.textContent = message;
+    wrap.appendChild(node);
+    setTimeout(() => node.remove(), 7000);
+  }
+  async function pollNotifications() {
+    try {
+      const response = await fetch("{% url 'notifications-poll' %}", {headers: {"Accept": "application/json"}});
+      if (!response.ok) return;
+      const data = await response.json();
+      if (!data.messages) return;
+      const badge = document.getElementById("notif-badge");
+      if (badge) badge.textContent = data.unread ? ` · ${data.unread}` : "";
+      for (const item of data.messages) {
+        if (seenToasts.has(item.id)) continue;
+        seenToasts.add(item.id);
+        showToast(item.message);
+      }
+    } catch (error) { /* offline or logged out; retry next cycle */ }
+  }
+  setInterval(pollNotifications, 10000);
+  pollNotifications();
+</script>
+{% endif %}
 </body>
 </html>

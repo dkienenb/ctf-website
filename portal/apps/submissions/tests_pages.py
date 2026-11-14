@@ -84,6 +84,21 @@ class PageFlowTests(TestCase):
         self.client.force_login(self.pending)
         self.assertRedirects(self.client.get("/"), "/status/")
 
+    def test_notification_poll_json(self):
+        self.client.force_login(self.approved)
+        from portal.apps.submissions.models import Notification
+
+        Notification.objects.create(recipient=self.approved, message="Lease expired. Lab saved.")
+        Notification.objects.create(recipient=self.approved, message="Both guests are ready.")
+        response = self.client.get("/notifications/poll")
+        self.assertEqual(response.status_code, 200)
+        data = response.json()
+        self.assertEqual(data["unread"], 2)
+        self.assertEqual(len(data["messages"]), 2)
+        # Pending users cannot poll (approval is a backend condition).
+        self.client.force_login(self.pending)
+        self.assertEqual(self.client.get("/notifications/poll").status_code, 403)
+
     def test_idempotent_form_resubmission(self):
         """Double-submitted forms reuse the rendered request id: no extra attempt."""
         self.client.force_login(self.approved)
