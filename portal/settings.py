@@ -142,6 +142,7 @@ ACCOUNT_EMAIL_VERIFICATION = "none"
 ACCOUNT_UNIQUE_EMAIL = False
 SOCIALACCOUNT_AUTO_SIGNUP = True
 SOCIALACCOUNT_QUERY_EMAIL = False
+SOCIALACCOUNT_STORE_TOKENS = True  # needed for the explicit "Reload from Discord" action
 SOCIALACCOUNT_ADAPTER = "portal.apps.accounts.adapter.DiscordAccountAdapter"
 # No email on the user model: the Discord identify scope supplies no address.
 ACCOUNT_USER_MODEL_EMAIL_FIELD = None
