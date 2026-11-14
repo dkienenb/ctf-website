@@ -1,0 +1,12 @@
+{% extends "base.html" %}
+{% block title %}Sign in with Discord — CTF Practice{% endblock %}
+{% block content %}
+<div class="auth-card panel">
+  <h1>Sign in with Discord</h1>
+  <p class="muted">You'll authorize the CTF Practice application on Discord. Only your public identity is requested — no email, no servers, no read access.</p>
+  <form method="post" action="{% url 'discord_login' %}">
+    {% csrf_token %}
+    <button class="btn primary" type="submit">Continue with Discord</button>
+  </form>
+</div>
+{% endblock %}
