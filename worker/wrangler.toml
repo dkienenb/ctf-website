@@ -1,0 +1,7 @@
+name = "ctf-portal-proxy"
+main = "index.js"
+compatibility_date = "2026-01-01"
+
+[vars]
+# Set to the private gateway hostname bound through the Tunnel/VPC service.
+ORIGIN_HOST = "gateway.internal"

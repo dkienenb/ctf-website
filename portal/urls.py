@@ -6,6 +6,7 @@ from portal.apps.accounts import views as account_views
 from portal.apps.content import views as content_views
 from portal.apps.submissions import views as submission_views
 from portal.apps.submissions import manage_views
+from portal.apps.labs import views as labs_views
 
 urlpatterns = [
     path("admin/", admin.site.urls),
@@ -44,4 +45,5 @@ urlpatterns = [
     path("manage/challenges/create", manage_views.create_challenge, name="manage-create-challenge"),
     path("manage/action", manage_views.action, name="manage-action"),
     path("manage/preapprove", manage_views.preapprove_action, name="manage-preapprove"),
+    path("labs/<slug:slug>/<str:action>", labs_views.lab_action, name="lab-action"),
 ]

@@ -14,6 +14,25 @@ from django.conf import settings
 from django.db import models
 
 
+class Host(models.Model):
+    """Workhorse host inventory (handoff §20). Capacity model lands with agents;
+    launch uses one compatible slot per host."""
+
+    name = models.CharField(max_length=100, unique=True)
+    online = models.BooleanField(default=True)
+    capacity_slots = models.PositiveSmallIntegerField(default=1)
+
+    class Meta:
+        db_table = "labs_host"
+
+    def __str__(self):
+        return self.name
+
+    @property
+    def holding_states(self):
+        return LabInstance.HOLDING_STATES
+
+
 class LabTemplate(models.Model):
     """Challenge → pinned attacker/target template versions."""
 
@@ -36,13 +55,15 @@ class LabTemplate(models.Model):
 
 
 class LabInstance(models.Model):
-    """A user's lab for one challenge (handoff state machine lands with services)."""
+    """A user's lab for one challenge (handoff §18 state machine)."""
+
+    HOLDING_STATES = ("reserved", "starting", "restoring", "running", "saving", "unavailable")
 
     user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="labs")
     challenge = models.ForeignKey("content.Challenge", on_delete=models.PROTECT, related_name="labs")
     template = models.ForeignKey(LabTemplate, null=True, on_delete=models.PROTECT, related_name="instances")
-    host = models.CharField(max_length=100, blank=True)  # Original workhorse; placement resumes here initially.
-    state = models.CharField(max_length=20, default="saved")  # Baseline state enumeration §18.
+    host = models.ForeignKey(Host, null=True, on_delete=models.PROTECT, related_name="labs")
+    state = models.CharField(max_length=20, default="saved")
     generation = models.PositiveBigIntegerField(default=1)
     saved_state_ref = models.CharField(max_length=500, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
@@ -50,7 +71,16 @@ class LabInstance(models.Model):
 
     class Meta:
         db_table = "labs_lab_instance"
-        constraints = [models.UniqueConstraint(fields=("user", "challenge"), name="uniq_lab_user_challenge")]
+        constraints = [
+            models.UniqueConstraint(fields=("user", "challenge"), name="uniq_lab_user_challenge"),
+            # One active allocation per user overall (handoff §11); enforced by
+            # the database as well as the service layer.
+            models.UniqueConstraint(
+                fields=("user",),
+                condition=models.Q(state__in=("reserved", "starting", "restoring", "running", "saving", "unavailable")),
+                name="uniq_one_active_allocation",
+            ),
+        ]
 
 
 class Lease(models.Model):
@@ -59,6 +89,8 @@ class Lease(models.Model):
     expires_at = models.DateTimeField()
     revision = models.PositiveBigIntegerField(default=1)
     active = models.BooleanField(default=True)
+    warned_five = models.BooleanField(default=False)
+    warned_one = models.BooleanField(default=False)
 
     class Meta:
         db_table = "labs_lease"

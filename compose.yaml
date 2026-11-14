@@ -15,5 +15,45 @@ services:
       timeout: 3s
       retries: 10
 
+  app:
+    build: .
+    environment:
+      DJANGO_SECRET_KEY: ${DJANGO_SECRET_KEY:-insecure-dev-key-change-me}
+      DJANGO_DEBUG: ${DJANGO_DEBUG:-0}
+      DJANGO_ALLOWED_HOSTS: ${DJANGO_ALLOWED_HOSTS:-localhost,127.0.0.1,app,caddy}
+      POSTGRES_DB: ${POSTGRES_DB:-ctf}
+      POSTGRES_USER: ${POSTGRES_USER:-ctf}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-ctf}
+      POSTGRES_HOST: db
+      POSTGRES_PORT: "5432"
+      DISCORD_CLIENT_ID: ${DISCORD_CLIENT_ID:-}
+      DISCORD_CLIENT_SECRET: ${DISCORD_CLIENT_SECRET:-}
+    depends_on:
+      db:
+        condition: service_healthy
+
+  lab-tick:
+    build: .
+    command: ["scheduler"]
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-ctf}
+      POSTGRES_USER: ${POSTGRES_USER:-ctf}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-ctf}
+      POSTGRES_HOST: db
+      POSTGRES_PORT: "5432"
+      DJANGO_SECRET_KEY: ${DJANGO_SECRET_KEY:-insecure-dev-key-change-me}
+    depends_on:
+      db:
+        condition: service_healthy
+
+  gateway:
+    image: caddy:2-alpine
+    ports:
+      - "127.0.0.1:8090:80"
+    volumes:
+      - ./caddy/Caddyfile:/etc/caddy/Caddyfile:ro
+    depends_on:
+      - app
+
 volumes:
   pgdata:

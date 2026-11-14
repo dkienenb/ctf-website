@@ -59,7 +59,31 @@
 {% if challenge.lab_template %}
   <section class="panel">
     <h2>Your lab</h2>
-    <p class="muted small">Pinned templates: {{ challenge.lab_template.attacker_version }} / {{ challenge.lab_template.target_version }}. Lab allocation arrives with the infrastructure build; questions remain fully usable without a machine.</p>
+    {% with lab=user.labs.all|first %}
+      {% if lab and lab.challenge_id == challenge.id %}
+        <p class="muted small">State: {{ lab.state }} · pinned templates: {{ challenge.lab_template.attacker_version }} / {{ challenge.lab_template.target_version }} · host: {% firstof lab.host.name 'unassigned' %}</p>
+        {% if lab.state == 'reserved' %}
+          <form method="post" action="{% url 'lab-action' challenge.slug 'claim' %}" class="filters">{% csrf_token %}<button class="btn primary" type="submit">Claim 30-minute lab</button></form>
+        {% elif lab.state == 'running' %}
+          {% with lease=lab.leases.all|first %}
+            <p>Lease ends {{ lease.expires_at|date:"H:i" }} (UTC).</p>
+          {% endwith %}
+          <div class="button-row">
+            <form method="post" action="{% url 'lab-action' challenge.slug 'refresh' %}">{% csrf_token %}<button class="btn secondary" type="submit">Refresh lease</button></form>
+            <form method="post" action="{% url 'lab-action' challenge.slug 'release' %}">{% csrf_token %}<button class="btn secondary" type="submit">Save &amp; release</button></form>
+          </div>
+          <p class="muted small">Desktop streaming arrives with the Guacamole integration; lease accounting is live. Closing the browser leaves the lease running.</p>
+        {% elif lab.state == 'unavailable' %}
+          <p class="muted small">Host unavailable. State references retained; no reset has occurred.</p>
+        {% else %}
+          <form method="post" action="{% url 'lab-action' challenge.slug 'request' %}" class="filters">{% csrf_token %}<button class="btn primary" type="submit">Request lab</button></form>
+        {% endif %}
+        <form method="post" action="{% url 'lab-action' challenge.slug 'request-reset' %}" class="filters">{% csrf_token %}<button class="btn small secondary" type="submit">Request an administrator reset</button></form>
+      {% else %}
+        <p class="muted small">One active lab overall. One saved pair per challenge. Pinned templates: {{ challenge.lab_template.attacker_version }} / {{ challenge.lab_template.target_version }}.</p>
+        <form method="post" action="{% url 'lab-action' challenge.slug 'request' %}" class="filters">{% csrf_token %}<button class="btn primary" type="submit">Request lab</button></form>
+      {% endif %}
+    {% endwith %}
   </section>
 {% endif %}
 {% endblock %}
