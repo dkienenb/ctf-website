@@ -17,6 +17,8 @@ services:
 
   app:
     build: .
+    volumes:
+      - attachments:/app/private_attachments
     environment:
       DJANGO_SECRET_KEY: ${DJANGO_SECRET_KEY:-insecure-dev-key-change-me}
       DJANGO_DEBUG: ${DJANGO_DEBUG:-0}
@@ -57,3 +59,4 @@ services:
 
 volumes:
   pgdata:
+  attachments:

@@ -176,7 +176,9 @@ class Command(BaseCommand):
                     hint.save()
 
                 attachment_definition = definition.get("attachment")
-                if attachment_definition and not challenge.attachments.exists():
+                if attachment_definition and (not challenge.attachments.exists() or update):
+                    # Re-save on --update so files can be repaired after volume loss.
+                    challenge.attachments.all().delete()
                     filename, content = attachment_definition
                     attachment = Attachment(challenge=challenge, filename=filename)
                     attachment.file.save(filename, ContentFile(content.encode()), save=False)
