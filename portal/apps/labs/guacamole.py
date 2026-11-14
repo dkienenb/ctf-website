@@ -23,13 +23,17 @@ from cryptography.hazmat.primitives.padding import PKCS7
 
 from django.conf import settings
 
+from .services import vnc_port_for
+
 GRANT_TTL_MS = 5 * 60 * 1000
 GUAC_ORIGIN = "/guacamole/"
 ZERO_IV = b"\x00" * 16
 
 
 class GrantError(Exception):
-    pass
+    def __init__(self, message):
+        super().__init__(message)
+        self.message = message
 
 
 def _json_secret():
