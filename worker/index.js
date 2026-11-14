@@ -19,6 +19,10 @@ export default {
     headers.set("X-Forwarded-Proto", "https");
     headers.set("X-Forwarded-Host", url.host);
     headers.set("Host", url.host);
+    // The VPC binding rewrites standard proxy headers to the service target;
+    // the public hostname and scheme travel in custom headers instead.
+    headers.set("X-Public-Host", url.host);
+    headers.set("X-Public-Proto", "https");
     const upstream = new Request(`${ORIGIN}${url.pathname}${url.search}`, {
       method: request.method,
       headers,
