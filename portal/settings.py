@@ -145,9 +145,15 @@ SOCIALACCOUNT_QUERY_EMAIL = False
 SOCIALACCOUNT_ADAPTER = "portal.apps.accounts.adapter.DiscordAccountAdapter"
 # No email on the user model: the Discord identify scope supplies no address.
 ACCOUNT_USER_MODEL_EMAIL_FIELD = None
-ACCOUNT_LOGIN_METHODS = {"username"}  # Unused; Discord OAuth is the only auth path.
+# The user model has no username field either (Discord-keyed identity);
+# allauth must not look it up during social signup.
+ACCOUNT_USER_MODEL_USERNAME_FIELD = None
+# Nominal values: local login/signup forms are unreachable by URL override.
+# An empty login-methods set is what allauth expects for social-only users
+# whose model has neither username nor email fields.
+ACCOUNT_LOGIN_METHODS = set()
+ACCOUNT_SIGNUP_FIELDS = ["password1*", "password2*"]
 # No email on the user model: Discord identify scope supplies no address.
-USER_MODEL_EMAIL_FIELD = None
 # Routes under /accounts/ per allauth defaults; login is Discord-only.
 LOGIN_REDIRECT_URL = "/"
 ACCOUNT_LOGOUT_REDIRECT_URL = "/"
