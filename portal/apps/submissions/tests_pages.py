@@ -145,13 +145,16 @@ class PageFlowTests(TestCase):
         """Regression: 'desktop' matched the <str:action> catch-all and its
         @require_POST, so the GET to open the desktop returned 405."""
         self.client.force_login(self.approved)
-        from portal.apps.labs.models import LabInstance, LabTemplate
+        from portal.apps.labs.models import Host, LabInstance, LabTemplate
 
         question = make_question(["x"])
         template = LabTemplate.objects.create(attacker_version="a", target_version="t")
         question.challenge.lab_template = template
         question.challenge.save()
-        lab = LabInstance.objects.create(user=self.approved, challenge=question.challenge, state="running")
+        host = Host.objects.create(name="grant-test-host", management_ip="10.0.0.9")
+        lab = LabInstance.objects.create(
+            user=self.approved, challenge=question.challenge, state="running", host=host
+        )
         with override_settings(GUACAMOLE_JSON_SECRET="ab" * 16):
             response = self.client.get(reverse("lab-desktop", args=[question.challenge.slug]))
         self.assertEqual(response.status_code, 302)
