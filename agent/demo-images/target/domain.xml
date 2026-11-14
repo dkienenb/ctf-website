@@ -31,7 +31,9 @@
     <console type='pty'>
       <target type='serial' port='0'/>
     </console>
-    <graphics type='vnc' autoport='yes' listen='127.0.0.1'/>
+    <!-- No desktop on the target: players never receive authenticated direct
+         access to the target (handoff §10). Console access is the operator's. -->
+    <graphics type='none'/>
     <memballoon model='virtio'/>
   </devices>
 </domain>

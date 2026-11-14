@@ -181,3 +181,7 @@ STORAGES = {
 }
 
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
+
+# Guacamole signed-JSON auth (handoff §16): 128-bit hex secret shared with
+# the guacamole container's JSON_SECRET_KEY.
+GUACAMOLE_JSON_SECRET = env("GUACAMOLE_JSON_SECRET", "")

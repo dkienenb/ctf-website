@@ -30,3 +30,23 @@ def lab_action(request, slug, action):
     except services.ServiceError as error:
         messages.error(request, error.message)
     return redirect("challenge_detail", slug=slug)
+
+
+@approved_page
+def desktop(request, slug):
+    """Entry into the Guacamole desktop for the user's RUNNING lab (§16).
+
+    The grant is signed server-side and scoped to this lab's attacker VNC
+    endpoint only; nothing player-supplied selects the destination."""
+    challenge = get_object_or_404(Challenge, slug=slug)
+    lab = request.user.labs.filter(challenge=challenge).first()
+    from .guacamole import GrantError, issue_grant
+
+    if not lab or lab.state != "running":
+        messages.error(request, "No running lab. Claim a lease first.")
+        return redirect("challenge_detail", slug=slug)
+    try:
+        return redirect(issue_grant(request.user, lab))
+    except GrantError as error:
+        messages.error(request, error.message)
+        return redirect("challenge_detail", slug=slug)

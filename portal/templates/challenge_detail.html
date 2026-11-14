@@ -69,10 +69,11 @@
             <p>Lease ends {{ lease.expires_at|date:"H:i" }} (UTC).</p>
           {% endwith %}
           <div class="button-row">
+            <a class="btn primary" href="{% url 'lab-desktop' challenge.slug %}">Open browser desktop</a>
             <form method="post" action="{% url 'lab-action' challenge.slug 'refresh' %}">{% csrf_token %}<button class="btn secondary" type="submit">Refresh lease</button></form>
             <form method="post" action="{% url 'lab-action' challenge.slug 'release' %}">{% csrf_token %}<button class="btn secondary" type="submit">Save &amp; release</button></form>
           </div>
-          <p class="muted small">Desktop streaming arrives with the Guacamole integration; lease accounting is live. Closing the browser leaves the lease running.</p>
+          <p class="muted small">The desktop grants access to your own attacker VM only, for the length of the lease. Closing the browser leaves the lease running.</p>
         {% elif lab.state == 'unavailable' %}
           <p class="muted small">Host unavailable. State references retained; no reset has occurred.</p>
         {% else %}

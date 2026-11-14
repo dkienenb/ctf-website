@@ -1,15 +1,20 @@
-# Caddy routes the portal and (later) Guacamole paths (handoff §14).
+# Caddy routes the portal and Guacamole paths (handoff §14, §16).
 # The Cloudflare Tunnel reaches this gateway only — never the lab network.
 :80 {
+	# Guacamole: browser desktop sessions for RUNNING lab leases only.
+	# The guacamole container runs with a ROOT webapp context, so the
+	# /guacamole/ prefix is stripped here. guacd itself stays private.
+	handle_path /guacamole/* {
+		reverse_proxy guacamole:8080
+	}
+	handle /guacamole {
+		redir /guacamole/ /guacamole/ 308
+	}
+
 	# Portal: forwarded by the Worker/VPC path and usable directly on the LAN.
 	handle {
 		reverse_proxy app:8000
 	}
-
-	# Guacamole paths land here once the gateway integration is built:
-	# handle_path /guacamole/* {
-	# 	reverse_proxy guacamole:8080
-	# }
 
 	header {
 		Strict-Transport-Security "max-age=31536000"

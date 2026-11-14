@@ -53,6 +53,7 @@ urlpatterns = [
     path("manage/action", manage_views.action, name="manage-action"),
     path("manage/preapprove", manage_views.preapprove_action, name="manage-preapprove"),
     path("labs/<slug:slug>/<str:action>", labs_views.lab_action, name="lab-action"),
+    path("labs/<slug:slug>/desktop", labs_views.desktop, name="lab-desktop"),
     path("agentapi/heartbeat", labs_agent_views.heartbeat, name="agent-heartbeat"),
     path("agentapi/commands", labs_agent_views.poll, name="agent-poll"),
     path("agentapi/commands/<str:op_id>/result", labs_agent_views.result, name="agent-result"),
