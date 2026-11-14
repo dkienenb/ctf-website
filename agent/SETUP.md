@@ -48,3 +48,8 @@ version replacement).
 
 The agent enforces the last acknowledged lease deadline locally, so expiry
 saves the guests even when the controller link is down (§11, §18).
+
+## Adding more workhorses
+
+See `agent/ADD-A-WORKHORSE.md` for the full clone → install → register →
+verify → images runbook.
