@@ -13,7 +13,7 @@ Database-level invariants carried over from the verified prototype:
   hint's current price.
 """
 from django.conf import settings
-from django.db import models
+from django.db import models, transaction
 
 
 class Submission(models.Model):
@@ -24,6 +24,7 @@ class Submission(models.Model):
         REPLACEMENT = "replacement", "Excluded by question replacement"
         INCORRECT_CLEAR = "incorrect-clear", "Cleared as incorrect attempt"
         CORRECTION_PRUNED = "correction-pruned", "Pruned after an earlier corrected solve"
+        DUPLICATE = "duplicate", "Pruned as a duplicate active answer during regrading"
 
     user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="submissions")
     question = models.ForeignKey("content.Question", on_delete=models.PROTECT, related_name="submissions")
@@ -110,6 +111,30 @@ class AuditEvent(models.Model):
     class Meta:
         db_table = "submissions_audit_event"
         indexes = [models.Index(fields=["operation", "created_at"])]
+
+
+class DataRevision(models.Model):
+    """Coarse data-version stamp so preview and apply agree on the data version (§8)."""
+
+    id = models.PositiveIntegerField(primary_key=True, editable=False)
+    value = models.PositiveBigIntegerField(default=1)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = "submissions_data_revision"
+
+    @classmethod
+    def current(cls):
+        row, _ = cls.objects.get_or_create(id=1, defaults={"value": 1})
+        return row.value
+
+    @classmethod
+    def bump(cls):
+        with transaction.atomic():
+            row, _ = cls.objects.select_for_update().get_or_create(id=1, defaults={"value": 1})
+            row.value += 1
+            row.save(update_fields=("value", "updated_at"))
+            return row.value
 
 
 class Notification(models.Model):
