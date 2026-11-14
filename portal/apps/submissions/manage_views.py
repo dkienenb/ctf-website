@@ -342,8 +342,8 @@ def _perform_action(actor, action, target):
         adminops.set_lifecycle(actor, int(target), Challenge.Lifecycle.ARCHIVED)
     elif action in ("reset-target", "reset-full", "recover"):
         user_id, challenge_id = target.split(":")
-        services.admin_reset(actor, int(user_id), int(challenge_id),
-                             {"reset-target": "target", "reset-full": "full", "recover": "recover"}[action])
+        lab_services.admin_reset(actor, int(user_id), int(challenge_id),
+                                 {"reset-target": "target", "reset-full": "full", "recover": "recover"}[action])
     else:
         raise adminops.ServiceError("Unknown administrator action.")
 

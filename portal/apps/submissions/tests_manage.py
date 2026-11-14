@@ -114,6 +114,24 @@ class ManagePageTests(TestCase):
         }, follow=True)
         self.assertEqual(services.summary(self.member)["points"], 0)
 
+    def test_lab_recovery_action_issues_command(self):
+        """The Recover button issues the durable recover command (regression:
+        this was a 500 — the view referenced an unimported service module)."""
+        from portal.apps.labs.models import Host, HostCommand, LabInstance
+
+        self.client.force_login(self.admin)
+        host = Host.objects.create(name="recovery-test-host")
+        challenge = make_question(["x"]).challenge
+        lab = LabInstance.objects.create(user=self.member, challenge=challenge, host=host, state="recovery")
+        response = self.client.post(
+            reverse("manage-action"),
+            {"action": "recover", "target": f"{self.member.id}:{challenge.id}", "confirm": "1"},
+        )
+        self.assertRedirects(response, reverse("manage"))
+        command = HostCommand.objects.filter(lab=lab, operation="recover").first()
+        self.assertIsNotNone(command)
+        self.assertEqual(command.status, HostCommand.Status.PENDING)
+
     def test_preapprove_and_lifecycle_buttons(self):
         self.client.force_login(self.admin)
         response = self.client.post(reverse("manage-preapprove"), {"discord_id": "1234567890123"}, follow=True)
