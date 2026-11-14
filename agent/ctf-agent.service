@@ -1,0 +1,23 @@
+# CTF workhorse agent (restricted; libvirt only; no shell).
+[Unit]
+Description=CTF workhorse agent (libvirt operations only)
+After=libvirtd.service network-online.target
+Wants=libvirtd.service
+
+[Service]
+User=ctf-agent
+Group=ctf-agent
+SupplementaryGroups=kvm libvirt
+ExecStart=/usr/bin/python3 /opt/ctf/agent/agent.py
+Environment=CTF_AGENT_CONFIG=/etc/ctf/agent.toml
+Restart=always
+RestartSec=5
+# Hardening: the agent needs libvirt and its storage only.
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+ReadWritePaths=/var/lib/ctf/agent
+PrivateTmp=yes
+
+[Install]
+WantedBy=multi-user.target

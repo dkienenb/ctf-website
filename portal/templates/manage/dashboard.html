@@ -62,6 +62,24 @@
 </section>
 
 <section class="panel">
+  <h2>Workhorse &amp; lab instances</h2>
+  {% for lab in labs %}
+    <div class="row">
+      <div><strong>User #{{ lab.user_id }} · {{ lab.challenge.title }}</strong>
+        <span class="muted small">{{ lab.state }} · gen {{ lab.generation }} · host {% firstof lab.host.name 'unassigned' %}</span></div>
+      <div class="button-row">
+        {% if lab.state == 'recovery' or lab.state == 'saved' or lab.state == 'unavailable' %}
+          <form method="post" action="{% url 'manage-action' %}">{% csrf_token %}<input type="hidden" name="action" value="recover"><input type="hidden" name="target" value="{{ lab.user_id }}:{{ lab.challenge_id }}"><button class="btn small" type="submit">Recover</button></form>
+        {% endif %}
+        <form method="post" action="{% url 'manage-action' %}">{% csrf_token %}<input type="hidden" name="action" value="reset-target"><input type="hidden" name="target" value="{{ lab.user_id }}:{{ lab.challenge_id }}"><button class="btn small" type="submit">Reset target</button></form>
+        <form method="post" action="{% url 'manage-action' %}">{% csrf_token %}<input type="hidden" name="action" value="reset-full"><input type="hidden" name="target" value="{{ lab.user_id }}:{{ lab.challenge_id }}"><button class="btn small danger" type="submit">Reset both</button></form>
+      </div>
+    </div>
+  {% empty %}<p>No lab instances.</p>{% endfor %}
+  <p class="muted small">Resets are durable commands executed by the host agent; completion notifies the user. Machine resets never touch questions, hints, or scores.</p>
+</section>
+
+<section class="panel">
   <h2>Content publishing</h2>
   <form method="post" action="{% url 'manage-create-challenge' %}" class="stack-form">
     {% csrf_token %}

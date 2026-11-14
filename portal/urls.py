@@ -7,6 +7,7 @@ from portal.apps.content import views as content_views
 from portal.apps.submissions import views as submission_views
 from portal.apps.submissions import manage_views
 from portal.apps.labs import views as labs_views
+from portal.apps.labs import agent_views as labs_agent_views
 
 urlpatterns = [
     path("admin/", admin.site.urls),
@@ -46,4 +47,7 @@ urlpatterns = [
     path("manage/action", manage_views.action, name="manage-action"),
     path("manage/preapprove", manage_views.preapprove_action, name="manage-preapprove"),
     path("labs/<slug:slug>/<str:action>", labs_views.lab_action, name="lab-action"),
+    path("agentapi/heartbeat", labs_agent_views.heartbeat, name="agent-heartbeat"),
+    path("agentapi/commands", labs_agent_views.poll, name="agent-poll"),
+    path("agentapi/commands/<str:op_id>/result", labs_agent_views.result, name="agent-result"),
 ]

@@ -1,0 +1,110 @@
+"""Workhorse agent API (handoff §14, §18): heartbeat, command poll, results.
+
+Auth: per-host bearer token; only its sha256 hash is stored. The agent is a
+restricted service — it may register heartbeats, fetch its own pending
+commands, and report results for commands assigned to it. Nothing else.
+"""
+import hashlib
+
+from django.http import JsonResponse
+from django.utils import timezone
+from django.views.decorators.csrf import csrf_exempt
+from django.views.decorators.http import require_http_methods
+
+from .models import Host, HostCommand
+from . import services
+
+AGENT_PROTOCOL_VERSION = "1"
+
+
+def _host_from_request(request):
+    header = request.headers.get("Authorization", "")
+    if not header.startswith("Bearer "):
+        return None
+    token = header.removeprefix("Bearer ").strip()
+    if not token:
+        return None
+    token_hash = hashlib.sha256(token.encode()).hexdigest()
+    return Host.objects.filter(token_hash=token_hash).first()
+
+
+def _reject(message, status):
+    return JsonResponse({"error": message}, status=status)
+
+
+@require_http_methods(["POST"])
+@csrf_exempt
+def heartbeat(request):
+    host = _host_from_request(request)
+    if host is None:
+        return _reject("Invalid agent credentials.", 401)
+    import json
+
+    try:
+        payload = json.loads(request.body or b"{}")
+    except json.JSONDecodeError:
+        return _reject("Invalid JSON body.", 400)
+    host.last_heartbeat = timezone.now()
+    host.agent_version = str(payload.get("agent_version", ""))[:50]
+    for field in ("free_disk_gb", "total_disk_gb", "free_ram_gb", "total_ram_gb"):
+        try:
+            value = float(payload.get(field, host.__getattribute__(field)))
+            if value >= 0:
+                setattr(host, field, value)
+        except (TypeError, ValueError):
+            pass
+    host.running_labs = int(payload.get("running_labs", host.running_labs) or 0)
+    host.save(update_fields=(
+        "last_heartbeat", "agent_version", "free_disk_gb", "total_disk_gb",
+        "free_ram_gb", "total_ram_gb", "running_labs",
+    ))
+    # Reconcile: hand the agent its acknowledged deadlines for local
+    # enforcement when the controller link drops (§18).
+    deadlines = {}
+    for lab in host.labs.filter(state="running"):
+        lease = lab.leases.filter(active=True).order_by("-id").first()
+        if lease:
+            deadlines[str(lab.id)] = lease.expires_at.isoformat()
+    return JsonResponse({"protocol": AGENT_PROTOCOL_VERSION, "lease_deadlines": deadlines})
+
+
+@require_http_methods(["GET"])
+@csrf_exempt
+def poll(request):
+    host = _host_from_request(request)
+    if host is None:
+        return _reject("Invalid agent credentials.", 401)
+    host.last_heartbeat = timezone.now()
+    host.save(update_fields=("last_heartbeat",))
+    pending = HostCommand.objects.filter(host=host, status=HostCommand.Status.PENDING).order_by("created_at")
+    commands = [{
+        "op_id": command.op_id,
+        "operation": command.operation,
+        "expected_generation": command.expected_generation,
+        "lab": command.lab_id,
+        "payload": command.payload,
+        "acknowledged_deadline": command.acknowledged_deadline.isoformat() if command.acknowledged_deadline else None,
+    } for command in pending[:10]]
+    return JsonResponse({"commands": commands})
+
+
+@require_http_methods(["POST"])
+@csrf_exempt
+def result(request, op_id):
+    host = _host_from_request(request)
+    if host is None:
+        return _reject("Invalid agent credentials.", 401)
+    import json
+
+    try:
+        payload = json.loads(request.body or b"{}")
+    except json.JSONDecodeError:
+        return _reject("Invalid JSON body.", 400)
+    status = payload.get("status")
+    if status not in ("ok", "failed"):
+        return _reject("status must be ok or failed.", 400)
+    try:
+        outcome = services.complete_command(host, op_id, status, payload.get("result", {}))
+    except services.ServiceError as error:
+        return _reject(error.message, error.status)
+    return JsonResponse(outcome)

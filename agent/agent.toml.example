@@ -1,0 +1,6 @@
+# Workhorse agent configuration (owner-managed; never player-reachable).
+controller_url = "http://127.0.0.1:8090"
+host_name = "workhorse-01"
+token = "PASTE-TOKEN-FROM-register_host"
+images_dir = "/var/lib/ctf/agent/images"
+disks_dir = "/var/lib/ctf/agent/disks"

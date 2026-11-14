@@ -12,15 +12,24 @@ fixed here:
 """
 from django.conf import settings
 from django.db import models
+from django.utils import timezone
 
 
 class Host(models.Model):
-    """Workhorse host inventory (handoff §20). Capacity model lands with agents;
-    launch uses one compatible slot per host."""
+    """Workhorse host inventory (handoff §20). The agent reports capacity and
+    heartbeat; admission respects the owner's 20% free-resource reserve."""
 
     name = models.CharField(max_length=100, unique=True)
     online = models.BooleanField(default=True)
     capacity_slots = models.PositiveSmallIntegerField(default=1)
+    token_hash = models.CharField(max_length=64, blank=True)  # sha256 of the agent's bearer token.
+    agent_version = models.CharField(max_length=50, blank=True)
+    last_heartbeat = models.DateTimeField(null=True, blank=True)
+    free_disk_gb = models.FloatField(default=0)
+    total_disk_gb = models.FloatField(default=0)
+    free_ram_gb = models.FloatField(default=0)
+    total_ram_gb = models.FloatField(default=0)
+    running_labs = models.PositiveSmallIntegerField(default=0)
 
     class Meta:
         db_table = "labs_host"
@@ -29,8 +38,52 @@ class Host(models.Model):
         return self.name
 
     @property
-    def holding_states(self):
-        return LabInstance.HOLDING_STATES
+    def heartbeat_stale(self):
+        """No heartbeat for 90 seconds means the agent link is down. Guests are
+        NOT assumed stopped (§18): only admissions are blocked."""
+        if self.last_heartbeat is None:
+            return True
+        return (timezone.now() - self.last_heartbeat).total_seconds() > 90
+
+    @property
+    def admits(self):
+        """20% reserve (owner decision 2026-11-14): stop new admissions when
+        free RAM or disk drops below 20% of total capacity."""
+        if self.total_disk_gb <= 0 or self.total_ram_gb <= 0:
+            return self.online and not self.heartbeat_stale  # inventory unknown yet
+        disk_ok = self.free_disk_gb / self.total_disk_gb >= 0.2
+        ram_ok = self.free_ram_gb / self.total_ram_gb >= 0.2
+        return self.online and not self.heartbeat_stale and disk_ok and ram_ok
+
+
+class HostCommand(models.Model):
+    """Durable command (handoff §18): stable id, target, expected generation,
+    status, and result. Retries never duplicate destructive operations."""
+
+    class Status(models.TextChoices):
+        PENDING = "pending", "Pending"
+        RUNNING = "running", "Running"
+        COMPLETED = "completed", "Completed"
+        FAILED = "failed", "Failed"
+
+    op_id = models.CharField(max_length=64, unique=True)
+    host = models.ForeignKey(Host, on_delete=models.CASCADE, related_name="commands")
+    lab = models.ForeignKey("LabInstance", null=True, blank=True, on_delete=models.SET_NULL, related_name="commands")
+    operation = models.CharField(max_length=30)  # allocate / save / reset-target / reset-full
+    payload = models.JSONField(default=dict, blank=True)
+    expected_generation = models.PositiveBigIntegerField(default=1)
+    status = models.CharField(max_length=12, choices=Status.choices, default=Status.PENDING)
+    result = models.JSONField(default=dict, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    acknowledged_deadline = models.DateTimeField(null=True, blank=True)  # Host-local lease enforcement.
+
+    class Meta:
+        db_table = "labs_host_command"
+        indexes = [models.Index(fields=["host", "status"])]
+
+    def __str__(self):
+        return f"{self.operation}:{self.op_id}:{self.status}"
 
 
 class LabTemplate(models.Model):
@@ -57,7 +110,7 @@ class LabTemplate(models.Model):
 class LabInstance(models.Model):
     """A user's lab for one challenge (handoff §18 state machine)."""
 
-    HOLDING_STATES = ("reserved", "starting", "restoring", "running", "saving", "unavailable")
+    HOLDING_STATES = ("reserved", "starting", "restoring", "running", "saving", "unavailable", "recovery")
 
     user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="labs")
     challenge = models.ForeignKey("content.Challenge", on_delete=models.PROTECT, related_name="labs")
@@ -65,6 +118,7 @@ class LabInstance(models.Model):
     host = models.ForeignKey(Host, null=True, on_delete=models.PROTECT, related_name="labs")
     state = models.CharField(max_length=20, default="saved")
     generation = models.PositiveBigIntegerField(default=1)
+    target_generation = models.PositiveBigIntegerField(default=1)
     saved_state_ref = models.CharField(max_length=500, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
@@ -77,7 +131,7 @@ class LabInstance(models.Model):
             # the database as well as the service layer.
             models.UniqueConstraint(
                 fields=("user",),
-                condition=models.Q(state__in=("reserved", "starting", "restoring", "running", "saving", "unavailable")),
+                condition=models.Q(state__in=("reserved", "starting", "restoring", "running", "saving", "unavailable", "recovery")),
                 name="uniq_one_active_allocation",
             ),
         ]

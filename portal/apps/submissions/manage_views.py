@@ -10,6 +10,8 @@ from django.utils import timezone
 from portal.apps.accounts.decorators import admin_page
 from portal.apps.accounts.models import ApprovalDecision, User
 from portal.apps.content.models import Attachment, Challenge, Hint, Pool, Question
+from portal.apps.labs import services as lab_services
+from portal.apps.labs.models import LabInstance
 
 from . import adminops, corrections
 from .models import DataRevision, HintRedemption
@@ -80,6 +82,7 @@ def dashboard(request):
         "questions": questions,
         "hints": hints,
         "challenges": challenges,
+        "labs": LabInstance.objects.select_related("host", "challenge").order_by("id"),
         "preapprovals": ApprovalDecision.objects.order_by("-id")[:20],
         "preapprove_form": PreapproveForm(),
         "create_form": CreateChallengeForm(),
@@ -296,6 +299,9 @@ def _confirm_text(action, target):
         "delete-draft": ("Delete this draft?", "The draft, its questions, and its hints are removed permanently. Published challenges are archived instead."),
         "publish": ("Publish now?", "The challenge becomes visible immediately at its go-live time (empty go-live means now)."),
         "archive": ("Archive this challenge?", "It disappears from browsing but retains all scoring history and hint ownership."),
+        "reset-target": ("Reset the target only?", "The target returns to its pinned template. The attacker workspace, questions, hints, and scores are preserved."),
+        "reset-full": ("Reset both guests?", "Both guests return to their pinned templates. Attacker history is cleared. Questions, hints, and scores are retained."),
+        "recover": ("Simulate irrecoverable target loss?", "The affected target returns to its pinned template and the user is notified. Application progress is preserved."),
     }
     return texts.get(action, ("Confirm action?", "Apply this operator action?"))
 
@@ -309,6 +315,9 @@ def _success_text(action):
         "delete-draft": "Draft deleted.",
         "publish": "Challenge published.",
         "archive": "Challenge archived.",
+        "reset-target": "Target reset command issued.",
+        "reset-full": "Full reset command issued.",
+        "recover": "Recovery command issued.",
     }.get(action, "Action applied.")
 
 
@@ -331,6 +340,10 @@ def _perform_action(actor, action, target):
         adminops.set_lifecycle(actor, int(target), Challenge.Lifecycle.PUBLISHED)
     elif action == "archive":
         adminops.set_lifecycle(actor, int(target), Challenge.Lifecycle.ARCHIVED)
+    elif action in ("reset-target", "reset-full", "recover"):
+        user_id, challenge_id = target.split(":")
+        services.admin_reset(actor, int(user_id), int(challenge_id),
+                             {"reset-target": "target", "reset-full": "full", "recover": "recover"}[action])
     else:
         raise adminops.ServiceError("Unknown administrator action.")
 
