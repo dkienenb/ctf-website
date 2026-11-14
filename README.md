@@ -23,11 +23,15 @@ docker compose up -d db
 
 ## Build sequence (handoff §24)
 
-- [x] Step 4 (in progress): authoritative application model — accounts/approval,
-      pools, challenges, questions, accepted answers, submissions with
-      database-level attempt/solve/redemption invariants
-- [ ] Submission/scoring/correction services + views
+- [x] Steps 4–5: authoritative application — accounts/approval, Discord identity,
+      pools, challenges, questions, accepted answers, submissions, hints,
+      scoring, corrections engine, operator pages
+- [x] Step 6 (application side): allocation, queue, leases, warnings, host
+      outage handling, scheduler command — database-constraint enforced;
+      real host agents/libvirt remain
+- [x] Packaging: Docker image (gunicorn), compose stack (db + app + lab-tick +
+      Caddy gateway), Worker proxy scaffold
 - [ ] Steps 1–3: connectivity proof (workers.dev + VPC + Tunnel), one Guacamole
       desktop + isolated target, coordinated save/resume
-- [ ] Step 6: durable allocation, queue/leases, connection grants, agents
+- [ ] Steps 6 (infrastructure): workhorse agents, Guacamole grants, recovery
 - [ ] Steps 7–8: isolation/backup verification, launch content
