@@ -44,9 +44,6 @@ class Challenge(models.Model):
     description = models.TextField(blank=True)
     lifecycle = models.CharField(max_length=10, choices=Lifecycle.choices, default=Lifecycle.DRAFT)
     go_live = models.DateTimeField(null=True, blank=True)  # Publication timing, server-enforced.
-    lab_template = models.ForeignKey(
-        "labs.LabTemplate", null=True, blank=True, on_delete=models.SET_NULL, related_name="challenges"
-    )
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 

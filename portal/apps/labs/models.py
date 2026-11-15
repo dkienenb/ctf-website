@@ -134,7 +134,7 @@ class HostCommand(models.Model):
 class LabTemplate(models.Model):
     """Challenge → pinned attacker/target template versions."""
 
-    challenge = models.OneToOneField("content.Challenge", null=True, blank=True, on_delete=models.SET_NULL, related_name="+")
+    challenge = models.OneToOneField("content.Challenge", null=True, blank=True, on_delete=models.SET_NULL, related_name="lab_template")
     attacker_version = models.CharField(max_length=100)
     target_version = models.CharField(max_length=100)
     attacker_ram_mb = models.PositiveIntegerField(default=4096)

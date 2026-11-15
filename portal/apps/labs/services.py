@@ -609,3 +609,38 @@ def lab_template_save(actor, challenge_id, *, attacker_version, target_version,
     template.save()
     DataRevision.bump()
     return template
+
+
+def lab_template_clear(actor, challenge_id):
+    """Mark a challenge as having NO machine: the lab template is removed
+    and the challenge page stops offering desktops entirely (questions,
+    files, hints, and scores are untouched).
+
+    Holding labs (reserved/running/saving/recovery) are refused — finish or
+    recover them first. Saved/unavailable instances are discarded with their
+    leases, and any queued requests for the challenge are deactivated so the
+    queue cannot promote a fresh lab onto a machine-less challenge."""
+    from portal.apps.content.models import Challenge
+    from portal.apps.submissions.models import DataRevision
+
+    if actor is None or not getattr(actor, "is_admin", False):
+        raise ServiceError("Administrator access is required.", 403)
+    try:
+        challenge = Challenge.objects.get(pk=challenge_id)
+    except Challenge.DoesNotExist:
+        raise ServiceError("Challenge not found.", 404)
+    holding = LabInstance.objects.filter(challenge=challenge, state__in=LabInstance.HOLDING_STATES)
+    if holding.exists():
+        raise ServiceError(
+            "This challenge still holds lab slots (reserved/running/saving/recovery). "
+            "Have players release them or issue resets before removing the machine.", 409,
+        )
+    removed = LabInstance.objects.filter(challenge=challenge).count()
+    LabInstance.objects.filter(challenge=challenge).delete()
+    QueueEntry.objects.filter(challenge=challenge, active=True).update(active=False)
+    LabTemplate.objects.filter(challenge=challenge).delete()
+    from portal.apps.submissions.models import AuditEvent
+    AuditEvent.objects.create(actor=actor, operation="machine-clear", reason="",
+                              payload={"challenge": challenge.id, "instances_discarded": removed})
+    DataRevision.bump()
+    return {"instances_discarded": removed}

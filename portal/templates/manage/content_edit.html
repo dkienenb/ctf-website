@@ -35,6 +35,10 @@
     {{ lab_template_form.as_p }}
     <button class="btn secondary" type="submit">Pin template</button>
   </form>
+  {% if lab_template %}
+  <form method="post" action="{% url 'manage-action' %}" class="filters">{% csrf_token %}<input type="hidden" name="action" value="clear-machine"><input type="hidden" name="target" value="{{ challenge.id }}"><button class="btn small danger" type="submit">No machine — remove desktops from this challenge</button></form>
+  <p class="muted small">"No machine" makes this a questions/files/hints-only challenge: the lab panel disappears for players, saved labs for it are discarded, and its queue is cleared. Refused while lab slots are still held.</p>
+  {% endif %}
 </section>
 <section class="panel">
   <h2>Attachments</h2>

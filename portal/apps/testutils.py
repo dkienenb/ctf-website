@@ -40,12 +40,13 @@ def make_question(answers, points=100, pools=(), user=None):
 
 
 def make_lab_challenge():
-    template = LabTemplate.objects.create(attacker_version="kali-v1", target_version="target-v1")
     challenge = Challenge.objects.create(
-        title=f"Lab {template.id}",
-        slug=f"lab-{template.id}",
+        title=f"Lab {LabTemplate.objects.count() + 1}",
+        slug=f"lab-{uuid.uuid4().hex[:10]}",
         lifecycle=Challenge.Lifecycle.PUBLISHED,
-        lab_template=template,
+    )
+    template = LabTemplate.objects.create(
+        challenge=challenge, attacker_version="kali-v1", target_version="target-v1",
     )
     return challenge
 

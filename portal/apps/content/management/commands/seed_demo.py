@@ -139,9 +139,9 @@ class Command(BaseCommand):
                         target_version=LAB_TEMPLATE_DEFAULTS["target_version"],
                         defaults=LAB_TEMPLATE_DEFAULTS,
                     )
-                    if challenge.lab_template_id != template.id:
-                        challenge.lab_template = template
-                        challenge.save(update_fields=("lab_template", "updated_at"))
+                    if template.challenge_id != challenge.id:
+                        template.challenge = challenge
+                        template.save(update_fields=("challenge",))
                 for slug in definition["pools"]:
                     PoolChallenge.objects.get_or_create(pool=pools[slug], challenge=challenge)
 

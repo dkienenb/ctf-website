@@ -348,7 +348,7 @@ def content_edit(request, challenge_id):
         else:
             messages.error(request, "Check the form fields.")
     upload_form = AttachmentUploadForm()
-    lab_template = getattr(challenge, "labtemplate", None)
+    lab_template = getattr(challenge, "lab_template", None)  # reverse OneToOne accessor
     return render(request, "manage/content_edit.html", {
         "challenge": challenge, "form": form, "upload_form": upload_form,
         "lab_template_form": LabTemplateForm(initial=_lab_template_initial(lab_template)),
@@ -587,6 +587,7 @@ def _confirm_text(action, target):
         "delete-template": ("Delete this machine image?", "The artifact and its uploaded disk are removed. Deletion is refused while any challenge template still pins this version."),
         "delete-pool": ("Delete this pool?", "The pool disappears from the challenge browser and its members lose this grouping. Challenges, scores, and progress are untouched."),
         "revoke-preapproval": ("Revoke this pre-approval?", "The Discord ID no longer auto-approves at first sign-in. If an account already used the pre-approval, its access is untouched — suspend that account instead."),
+        "clear-machine": ("Remove the machine from this challenge?", "The challenge page stops offering desktops entirely. Saved labs for it are discarded (their leases end); questions, files, hints, and scores are untouched. Challenges still holding lab slots are refused."),
     }
     return texts.get(action, ("Confirm action?", "Apply this operator action?"))
 
@@ -608,6 +609,7 @@ def _success_text(action):
         "delete-template": "Machine image deleted.",
         "delete-pool": "Pool deleted.",
         "revoke-preapproval": "Pre-approval revoked.",
+        "clear-machine": "Machine removed from this challenge.",
     }.get(action, "Action applied.")
 
 
@@ -644,6 +646,8 @@ def _perform_action(actor, action, target):
         adminops.delete_pool(actor, int(target))
     elif action == "revoke-preapproval":
         adminops.revoke_preapproval(actor, target)
+    elif action == "clear-machine":
+        lab_services.lab_template_clear(actor, int(target))
     else:
         raise adminops.ServiceError("Unknown administrator action.")
 

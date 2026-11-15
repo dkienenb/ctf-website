@@ -10,7 +10,8 @@ from django.urls import reverse
 
 from portal.apps.accounts.models import User
 from portal.apps.content.models import Challenge
-from portal.apps.labs.models import Host, HostCommand, LabTemplate, MachineImage
+from portal.apps.testutils import make_question, make_user
+from portal.apps.labs.models import Host, HostCommand, LabInstance, LabTemplate, MachineImage, QueueEntry
 from portal.apps.labs import services
 from portal.apps.submissions.models import DataRevision
 from portal.apps.submissions.services import ServiceError
@@ -28,6 +29,7 @@ def make_admin(discord_id):
 class MachineImageServiceTests(TestCase):
     def setUp(self):
         self.admin = make_admin("900000000000000001")
+        self.user = make_user("900000000000000002", "Player")
         self.host = Host.objects.create(name="stage-host")
 
     def _image(self, role="target", version="v1", **kwargs):
@@ -125,11 +127,92 @@ class MachineImageServiceTests(TestCase):
         self.assertEqual(template.target_version, "victim-3")
 
     def test_admin_required(self):
-        pleb = User.objects.create_user("900000000000000002", "Pleb")
+        pleb = make_user("900000000000000009", "Pleb")
         with self.assertRaises(ServiceError):
             services.save_machine_image(pleb, role="target", version="v", domain_xml=DOMAIN_XML)
         with self.assertRaises(ServiceError):
             services.distribute_machine_image(pleb, 1)
+
+
+    def test_lab_template_clear_makes_the_challenge_machine_less(self):
+        """'No machine': the lab panel disappears for players, saved labs and
+        their queues are discarded, and the pin can be re-created later."""
+        challenge = Challenge.objects.create(title="Machine-less", slug="machine-less",
+                                             lifecycle=Challenge.Lifecycle.PUBLISHED)
+        template = services.lab_template_save(
+            self.admin, challenge.id,
+            attacker_version="", target_version="",
+            attacker_ram_mb=4096, attacker_vcpu=2, attacker_disk_gb=20,
+            target_ram_mb=2048, target_vcpu=1, target_disk_gb=10,
+        )
+        lab = LabInstance.objects.create(user=self.user, challenge=challenge,
+                                         template=template, state="saved")
+        QueueEntry.objects.create(user=self.user, challenge=challenge, active=True)
+        result = services.lab_template_clear(self.admin, challenge.id)
+        self.assertEqual(result["instances_discarded"], 1)
+        self.assertFalse(LabTemplate.objects.filter(pk=template.id).exists())
+        self.assertFalse(LabInstance.objects.filter(pk=lab.id).exists())
+        self.assertFalse(QueueEntry.objects.filter(user=self.user, challenge=challenge, active=True).exists())
+        # The player page no longer offers a lab at all.
+        self.client.force_login(self.user)
+        response = self.client.get(reverse("challenge_detail", args=[challenge.slug]))
+        self.assertEqual(response.status_code, 200)
+        self.assertNotContains(response, "Your lab")
+        self.assertNotContains(response, "Request lab")
+        # Re-pinning after a clear works (a fresh template is created).
+        re_pinned = services.lab_template_save(
+            self.admin, challenge.id,
+            attacker_version="", target_version="",
+            attacker_ram_mb=4096, attacker_vcpu=2, attacker_disk_gb=20,
+            target_ram_mb=2048, target_vcpu=1, target_disk_gb=10,
+        )
+        self.assertEqual(re_pinned.challenge, challenge)
+
+    def test_lab_template_clear_refuses_holding_labs(self):
+        challenge = Challenge.objects.create(title="Busy", slug="busy-1",
+                                             lifecycle=Challenge.Lifecycle.PUBLISHED)
+        LabInstance.objects.create(user=self.user, challenge=challenge, state="running")
+        with self.assertRaises(ServiceError) as error:
+            services.lab_template_clear(self.admin, challenge.id)
+        self.assertEqual(error.exception.status, 409)
+        self.assertTrue(LabInstance.objects.filter(challenge=challenge).exists())
+
+    def test_lab_template_clear_requires_admin(self):
+        challenge = Challenge.objects.create(title="C", slug="c-9")
+        pleb = make_user("900000000000000009", "Pleb")
+        with self.assertRaises(ServiceError) as error:
+            services.lab_template_clear(pleb, challenge.id)
+        self.assertEqual(error.exception.status, 403)
+
+    def test_clear_machine_through_the_confirm_flow(self):
+        challenge = Challenge.objects.create(title="Via page", slug="via-page",
+                                             lifecycle=Challenge.Lifecycle.PUBLISHED)
+        services.lab_template_save(
+            self.admin, challenge.id,
+            attacker_version="", target_version="",
+            attacker_ram_mb=4096, attacker_vcpu=2, attacker_disk_gb=20,
+            target_ram_mb=2048, target_vcpu=1, target_disk_gb=10,
+        )
+        self.client.force_login(self.admin)
+        response = self.client.post(reverse("manage-action"),
+                                    {"action": "clear-machine", "target": challenge.id})
+        self.assertEqual(response.status_code, 200)  # server-rendered confirm
+        self.assertContains(response, "Remove the machine from this challenge?")
+        response = self.client.post(reverse("manage-action"),
+                                    {"action": "clear-machine", "target": challenge.id, "confirm": "yes"})
+        self.assertEqual(response.status_code, 302)
+        self.assertFalse(LabTemplate.objects.filter(challenge=challenge).exists())
+
+    def test_clear_machine_refused_through_the_page_while_running(self):
+        challenge = Challenge.objects.create(title="Via page 2", slug="via-page-2",
+                                             lifecycle=Challenge.Lifecycle.PUBLISHED)
+        LabInstance.objects.create(user=self.user, challenge=challenge, state="reserved")
+        self.client.force_login(self.admin)
+        response = self.client.post(reverse("manage-action"),
+                                    {"action": "clear-machine", "target": challenge.id, "confirm": "yes"},
+                                    follow=True)
+        self.assertContains(response, "still holds lab slots")
+        self.assertTrue(LabInstance.objects.filter(challenge=challenge).exists())
 
 
 class MachineImagePageTests(TestCase):
