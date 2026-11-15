@@ -1,9 +1,10 @@
 {% extends "base.html" %}
 {% load form_tags %}
-{% block title %}{{ challenge.title }} — CTF Practice{% endblock %}
+{% block title %}{{ challenge.title }} — J-TAC CTF Practice{% endblock %}
 {% block content %}
 <p><a href="{% url 'home' %}">← Back to challenges</a></p>
 <h1>{{ challenge.title }}</h1>
+{% if challenge.author %}<p class="muted small">by {{ challenge.author }}</p>{% endif %}
 <div class="pool-links">
   {% for membership_pool in pools %}<a class="pool-link" href="{% url 'pool' membership_pool.slug %}">{{ membership_pool.name }}</a>{% endfor %}
 </div>
@@ -69,7 +70,7 @@
             <p>Lease ends {{ lease.expires_at|date:"H:i" }} (UTC).</p>
           {% endwith %}
           <div class="button-row">
-            <a class="btn primary" href="{% url 'lab-desktop' challenge.slug %}">Open browser desktop</a>
+            <a class="btn primary" href="{% url 'lab-desktop' challenge.slug %}" target="_blank" rel="noopener">Open browser desktop ↗</a>
             <form method="post" action="{% url 'lab-action' challenge.slug 'refresh' %}">{% csrf_token %}<button class="btn secondary" type="submit">Refresh lease</button></form>
             <form method="post" action="{% url 'lab-action' challenge.slug 'release' %}">{% csrf_token %}<button class="btn secondary" type="submit">Save &amp; release</button></form>
           </div>

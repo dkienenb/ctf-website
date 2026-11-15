@@ -7,7 +7,7 @@ from django.test import TestCase, override_settings
 from django.urls import reverse
 
 from portal.apps.accounts.models import ApprovalDecision, User
-from portal.apps.content.models import Challenge, Hint, Pool, Question
+from portal.apps.content.models import AcceptedAnswer, Challenge, Hint, Pool, Question
 from portal.apps.submissions import adminops, services
 from portal.apps.labs.models import LabInstance, QueueEntry
 from portal.apps.submissions.models import (
@@ -66,6 +66,108 @@ class OperatorServiceTests(TestCase):
         self.client.force_login(self.admin)
         self.assertContains(self.client.get(reverse("manage")), "No pre-approved IDs yet.")
 
+    def test_challenge_create_page_supports_multiple_pools_and_author(self):
+        self.client.force_login(self.admin)
+        pool_a = Pool.objects.create(name="Pool A", slug="pool-a")
+        pool_b = Pool.objects.create(name="Pool B", slug="pool-b")
+        response = self.client.post(reverse("manage-create-challenge"), {
+            "title": "Dual pool", "author": "Dana",
+            "pools": [pool_a.id, pool_b.id],
+            "questions-TOTAL_FORMS": "1", "questions-INITIAL_FORMS": "0",
+            "questions-MIN_NUM_FORMS": "0", "questions-MAX_NUM_FORMS": "1000",
+            "questions-0-prompt": "q?", "questions-0-answers": "a", "questions-0-points": "10",
+        })
+        self.assertEqual(response.status_code, 302)
+        challenge = Challenge.objects.get(title="Dual pool")
+        self.assertEqual(challenge.author, "Dana")
+        self.assertEqual(
+            set(challenge.memberships.values_list("pool__slug", flat=True)),
+            {"pool-a", "pool-b"},
+        )
+        # And the player sees the credit on the challenge page (published first).
+        adminops.set_lifecycle(self.admin, challenge.id, Challenge.Lifecycle.PUBLISHED)
+        detail = self.client.get(reverse("challenge_detail", args=[challenge.slug]))
+        self.assertContains(detail, "by Dana")
+
+    def test_challenge_create_page_requires_a_pool(self):
+        self.client.force_login(self.admin)
+        response = self.client.post(reverse("manage-create-challenge"), {
+            "title": "No pools", "pools": [],
+            "questions-TOTAL_FORMS": "1", "questions-INITIAL_FORMS": "0",
+            "questions-MIN_NUM_FORMS": "0", "questions-MAX_NUM_FORMS": "1000",
+            "questions-0-prompt": "q?", "questions-0-answers": "a", "questions-0-points": "10",
+        })
+        self.assertEqual(response.status_code, 200)  # form error re-rendered
+        self.assertFalse(Challenge.objects.exists())
+
+    def test_content_edit_updates_author(self):
+        self.client.force_login(self.admin)
+        challenge = Challenge.objects.create(title="Authored", slug="authored-1",
+                                             lifecycle=Challenge.Lifecycle.PUBLISHED)
+        pool = Pool.objects.create(name="AP", slug="ap")
+        response = self.client.post(reverse("manage-content-edit", args=[challenge.id]), {
+            "title": "Authored", "author": "New Credit", "summary": "", "description": "",
+            "pools": [pool.id], "lifecycle": "published",
+            "revision": DataRevision.current(),
+        })
+        self.assertEqual(response.status_code, 302)
+        challenge.refresh_from_db()
+        self.assertEqual(challenge.author, "New Credit")
+
+    def test_inline_question_edit_applies_through_the_page(self):
+        """The challenge edit page hosts a compact editor per question; it
+        applies through the corrections engine (audit, revision guard)."""
+        self.client.force_login(self.admin)
+        challenge = Challenge.objects.create(title="Inline", slug="inline-1",
+                                             lifecycle=Challenge.Lifecycle.PUBLISHED)
+        question = Question.objects.create(challenge=challenge, prompt="Old?", points=10,
+                                           display_order=0)
+        AcceptedAnswer.objects.create(question=question, value="old")
+        response = self.client.post(reverse("manage-question-inline", args=[question.id]), {
+            "prompt": "New?", "answers": "new1\nnew2", "points": "25",
+            "display_order": "0", "input_format": "",
+            "mode": "none", "reason": "fix typo", "revision": DataRevision.current(),
+        })
+        self.assertEqual(response.status_code, 302)
+        question.refresh_from_db()
+        self.assertEqual(question.prompt, "New?")
+        self.assertEqual(question.points, 25)
+        # Mode "none" (corrected) ADDS alternates and keeps the old ones —
+        # the corrections engine's documented semantics.
+        self.assertEqual(list(question.accepted_answers.values_list("value", flat=True)),
+                         ["old", "new1", "new2"])
+        self.assertTrue(AuditEvent.objects.filter(operation="question-edit").exists())
+
+    def test_inline_question_edit_requires_reason_and_current_revision(self):
+        self.client.force_login(self.admin)
+        challenge = Challenge.objects.create(title="Inline2", slug="inline-2",
+                                             lifecycle=Challenge.Lifecycle.PUBLISHED)
+        question = Question.objects.create(challenge=challenge, prompt="Old?", points=10)
+        base = {"prompt": "New?", "answers": "a", "points": "10", "display_order": "0",
+                "input_format": "", "mode": "none"}
+        # Empty audit reason refused.
+        response = self.client.post(reverse("manage-question-inline", args=[question.id]),
+                                    {**base, "reason": "", "revision": DataRevision.current()})
+        self.assertEqual(response.status_code, 302)
+        question.refresh_from_db()
+        self.assertEqual(question.prompt, "Old?")  # nothing applied
+        # Stale revision refused.
+        response = self.client.post(reverse("manage-question-inline", args=[question.id]),
+                                    {**base, "reason": "late", "revision": DataRevision.current() - 1})
+        self.assertEqual(response.status_code, 302)
+        question.refresh_from_db()
+        self.assertEqual(question.prompt, "Old?")
+
+    def test_content_edit_page_renders_inline_question_forms(self):
+        self.client.force_login(self.admin)
+        challenge = Challenge.objects.create(title="Inline3", slug="inline-3",
+                                             lifecycle=Challenge.Lifecycle.PUBLISHED)
+        Question.objects.create(challenge=challenge, prompt="Q?", points=10)
+        response = self.client.get(reverse("manage-content-edit", args=[challenge.id]))
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Apply question edit")
+        self.assertContains(response, "/inline")
+
     def test_dashboard_renders_with_hint_redemptions(self):
         """Regression: the dashboard crashed with AttributeError on the first
         HintRedemption (recipient_id vs the model's user field)."""
@@ -105,7 +207,7 @@ class OperatorServiceTests(TestCase):
 
         pool = Pool.objects.create(name="Labeled pool", slug="labeled-pool")
         response = self.client.post(reverse("manage-create-challenge"), {
-            "title": "Labeled challenge", "pool": pool.id,
+            "title": "Labeled challenge", "pools": [pool.id],
             # Two questions; the third row is blank and must be skipped.
             "questions-TOTAL_FORMS": "3", "questions-INITIAL_FORMS": "0",
             "questions-MIN_NUM_FORMS": "0", "questions-MAX_NUM_FORMS": "1000",
@@ -131,7 +233,7 @@ class OperatorServiceTests(TestCase):
         self.client.force_login(self.admin)
         pool = Pool.objects.create(name="P", slug="p-x")
         response = self.client.post(reverse("manage-create-challenge"), {
-            "title": "Empty", "pool": pool.id,
+            "title": "Empty", "pools": [pool.id],
             "questions-TOTAL_FORMS": "1", "questions-INITIAL_FORMS": "0",
             "questions-MIN_NUM_FORMS": "0", "questions-MAX_NUM_FORMS": "1000",
             "questions-0-prompt": "", "questions-0-answers": "",
@@ -145,7 +247,7 @@ class OperatorServiceTests(TestCase):
         self.client.force_login(self.admin)
         pool = Pool.objects.create(name="P2", slug="p-2")
         response = self.client.post(reverse("manage-create-challenge"), {
-            "title": "Partial", "pool": pool.id,
+            "title": "Partial", "pools": [pool.id],
             "questions-TOTAL_FORMS": "2", "questions-INITIAL_FORMS": "0",
             "questions-MIN_NUM_FORMS": "0", "questions-MAX_NUM_FORMS": "1000",
             "questions-0-prompt": "q?", "questions-0-answers": "a", "questions-0-points": "10",
@@ -306,7 +408,7 @@ class OperatorServiceTests(TestCase):
 
     def test_content_lifecycle_and_draft_deletion(self):
         challenge = adminops.create_challenge(
-            self.admin, title="Doomed", pool_id=self._pool().id,
+            self.admin, title="Doomed", pool_ids=[self._pool().id],
             questions=[{"prompt": "Q?", "answers": ["a"], "points": 10}],
         )
         self.assertEqual(challenge.lifecycle, Challenge.Lifecycle.DRAFT)

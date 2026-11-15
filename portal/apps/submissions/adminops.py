@@ -234,21 +234,24 @@ def _clean_questions(questions):
     return cleaned
 
 
-def create_challenge(actor, *, title, description="", pool_id=None, questions):
+def create_challenge(actor, *, title, description="", pool_ids=(), author="", questions):
     _assert_admin(actor)
     if not title.strip():
         raise ServiceError("Title is required.")
+    if not isinstance(author, str) or len(author) > 100:
+        raise ServiceError("Author is a display credit of at most 100 characters.")
     try:
-        pool = Pool.objects.get(pk=pool_id) if pool_id else None
+        pools = [Pool.objects.get(pk=pool_id) for pool_id in pool_ids]
     except (Pool.DoesNotExist, ValueError, TypeError):
-        raise ServiceError("Select a valid pool.")
+        raise ServiceError("Select valid pools.")
     cleaned = _clean_questions(questions)
     challenge = Challenge.objects.create(
         title=title.strip(), slug=_unique_slug(title), summary="Draft challenge",
         description=description, lifecycle=Challenge.Lifecycle.DRAFT,
+        author=author.strip(),
     )
     try:
-        if pool:
+        for pool in pools:
             PoolChallenge.objects.create(pool=pool, challenge=challenge)
         for order, question in enumerate(cleaned):
             row = Question.objects.create(
@@ -267,6 +270,34 @@ def create_challenge(actor, *, title, description="", pool_id=None, questions):
     _audit(actor, "challenge-create", "", {"challenge": challenge.id, "questions": len(cleaned)})
     DataRevision.bump()
     return challenge
+
+
+def revoke_preapproval(actor, discord_id):
+    """Revoke a pre-approval: the ID no longer auto-approves at first sign-in.
+
+    Append-only ledger: a 'revoke-preapprove' row after the pre-approval.
+    An account that already used the pre-approval is untouched — suspending
+    that account is the separate lever (owner decision: revoke is about
+    future auto-approvals, never about stripping existing access)."""
+    _assert_admin(actor)
+    discord_id = str(discord_id)
+    if not discord_id.isdigit() or not 5 <= len(discord_id) <= 25:
+        raise ServiceError("Enter a 5–25 digit Discord ID.")
+    latest = ApprovalDecision.objects.filter(
+        discord_id=discord_id,
+        decision__in=("preapprove", "approve", "revoke-preapprove"),
+    ).order_by("-id").first()
+    if latest is None:
+        raise ServiceError("No pre-approval exists for that ID.", 404)
+    if latest.decision == "revoke-preapprove":
+        raise ServiceError("That pre-approval is already revoked.", 409)
+    if latest.decision == "approve":
+        raise ServiceError("That ID was approved directly, not pre-approved; suspend the account instead.", 409)
+    ApprovalDecision.objects.create(
+        discord_id=discord_id, decision="revoke-preapprove", actor=actor,
+    )
+    _audit(actor, "preapproval-revoke", "", {"discord_id": discord_id})
+    DataRevision.bump()
 
 
 def _unique_slug(title):
@@ -334,12 +365,14 @@ def delete_pool(actor, pool_id):
 
 
 def edit_content(actor, challenge, *, title, summary, description, pool_ids, expected_revision,
-                 lifecycle=None, go_live=None):
+                 lifecycle=None, go_live=None, author=""):
     _assert_admin(actor)
     if DataRevision.current() != expected_revision:
         raise ServiceError("Data changed since the page loaded. Reload and try again.", 409)
     if not isinstance(title, str) or not title.strip():
         raise ServiceError("Title is required.")
+    if not isinstance(author, str) or len(author) > 100:
+        raise ServiceError("Author is a display credit of at most 100 characters.")
     pools = []
     for pool_id in pool_ids:
         try:
@@ -352,7 +385,8 @@ def edit_content(actor, challenge, *, title, summary, description, pool_ids, exp
         challenge.title = title.strip()
         challenge.summary = str(summary or "")
         challenge.description = str(description or "")
-        challenge.save(update_fields=("title", "summary", "description", "updated_at"))
+        challenge.author = author.strip()
+        challenge.save(update_fields=("title", "summary", "description", "author", "updated_at"))
         PoolChallenge.objects.filter(challenge=challenge).delete()
         PoolChallenge.objects.bulk_create([PoolChallenge(pool=pool, challenge=challenge) for pool in pools])
         if lifecycle is not None:

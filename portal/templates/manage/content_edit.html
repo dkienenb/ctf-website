@@ -12,6 +12,22 @@
   </form>
 </section>
 <section class="panel">
+  <h2>Questions</h2>
+  <p class="muted small">Edit questions inline. The edit mode decides regrading: "corrected" keeps solves, "updated" regrades incorrect attempts, "replaced" regenerates the question for everyone. An audit reason is required; the full preview flow is still on each question's edit page.</p>
+  {% for question, qform in question_forms %}
+    <div class="question-row">
+      <p class="muted small">Question {{ forloop.counter }} · generation {{ question.generation }}</p>
+      <form method="post" action="{% url 'manage-question-inline' question.id %}">
+        {% csrf_token %}
+        {{ qform.as_p }}
+        <button class="btn small" type="submit">Apply question edit</button>
+      </form>
+      <a class="btn small secondary" href="{% url 'manage-question-edit' question.id %}">Preview &amp; full editor</a>
+    </div>
+  {% empty %}<p>No questions.</p>{% endfor %}
+</section>
+
+<section class="panel">
   <h2>Machine template</h2>
   <p class="muted small">Pin which machine images this challenge's lab uses (see <a href="{% url 'manage-machine-images' %}">machine images</a>). Leave a version empty to use the workhorse's demo template. Existing labs keep their current template.</p>
   <form method="post" action="{% url 'manage-lab-template' challenge.id %}">

@@ -4,12 +4,12 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <meta name="theme-color" content="#101115">
-<title>{% block title %}CTF Practice{% endblock %}</title>
+<title>{% block title %}J-TAC CTF Practice{% endblock %}</title>
 <link rel="stylesheet" href="{% static 'css/portal.css' %}">
 </head>
 <body>
 <header class="topbar">
-  <a class="brand" href="{% url 'home' %}">ctf<span class="brand-light">practice</span></a>
+  <a class="brand" href="{% url 'home' %}">j-tac<span class="brand-light">ctf practice</span></a>
   <nav aria-label="Main navigation">
     {% if user.is_authenticated and user.status == 'approved' %}
       <a href="{% url 'home' %}">Challenges</a>

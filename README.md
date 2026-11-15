@@ -1,4 +1,4 @@
-# CTF Practice Platform
+# J-TAC CTF Practice Site
 
 A self-hosted capture-the-flag **practice** site: players sign in with
 Discord, solve challenges (questions, files, and hints) to earn points, and

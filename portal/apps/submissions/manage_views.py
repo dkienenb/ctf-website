@@ -9,6 +9,8 @@ from django.shortcuts import get_object_or_404, redirect, render
 from django.utils import timezone
 
 from portal.apps.accounts.decorators import admin_page
+from portal.apps.submissions import corrections
+from portal.apps.submissions.corrections import MODE_MESSAGES
 from portal.apps.accounts.models import ApprovalDecision, User
 from portal.apps.content.models import Attachment, Challenge, Hint, Pool, Question
 from portal.apps.labs import services as lab_services
@@ -44,6 +46,7 @@ class HintEditForm(forms.Form):
 
 class ContentEditForm(forms.Form):
     title = forms.CharField(max_length=200)
+    author = forms.CharField(max_length=100, required=False, help_text="Display-only credit shown on the challenge page.")
     summary = forms.CharField(max_length=300, required=False)
     description = forms.CharField(widget=forms.Textarea(attrs={"rows": 4}), required=False)
     pools = forms.ModelMultipleChoiceField(queryset=Pool.objects.all(), widget=forms.CheckboxSelectMultiple)
@@ -61,13 +64,17 @@ class CreateChallengeForm(forms.Form):
         max_length=200,
         help_text="Players see this in the challenge browser. You can rename it later.",
     )
+    author = forms.CharField(
+        max_length=100, required=False,
+        help_text="Display-only credit shown on the challenge page (e.g. your name or a co-author list).",
+    )
     description = forms.CharField(
         widget=forms.Textarea(attrs={"rows": 3}), required=False,
         help_text="Markdown-ish flavor text shown on the challenge page. Optional.",
     )
-    pool = forms.ModelChoiceField(
-        queryset=Pool.objects.all(),
-        help_text="Which pool the challenge appears in. Multiple pools can be assigned after creation.",
+    pools = forms.ModelMultipleChoiceField(
+        queryset=Pool.objects.all(), widget=forms.CheckboxSelectMultiple,
+        help_text="Which pools the challenge appears in. More can be assigned later on the edit page.",
     )
 
 
@@ -150,6 +157,68 @@ def dashboard(request):
         "preapprove_form": PreapproveForm(),
         "revision": DataRevision.current(),
     })
+
+
+class InlineQuestionForm(forms.Form):
+    """Compact per-question editor embedded in the challenge edit page.
+    Applies through the corrections engine (audit + regrade semantics)."""
+
+    prompt = forms.CharField(max_length=1000)
+    answers = forms.CharField(widget=forms.Textarea(attrs={"rows": 2}))
+    points = forms.IntegerField(min_value=0)
+    display_order = forms.IntegerField(min_value=0)
+    input_format = forms.CharField(max_length=500, required=False)
+    mode = forms.ChoiceField(choices=[(m, MODE_MESSAGES[m]) for m in corrections.MODES])
+    reason = forms.CharField(max_length=500)
+    revision = forms.IntegerField(widget=forms.HiddenInput)
+
+    def cleaned_answers(self):
+        return [line.strip() for line in self.cleaned_data["answers"].splitlines() if line.strip()]
+
+
+@admin_page
+def question_inline(request, question_id):
+    """Apply an inline question edit from the challenge edit page."""
+    question = get_object_or_404(Question.objects.select_related("challenge"), pk=question_id)
+    if request.method != "POST":
+        return redirect("manage-content-edit", challenge_id=question.challenge_id)
+    form = InlineQuestionForm(request.POST)
+    if form.is_valid():
+        try:
+            result = corrections.apply_question_edit(
+                request.user, question,
+                answers=form.cleaned_answers(),
+                points=form.cleaned_data["points"],
+                mode=form.cleaned_data["mode"],
+                prompt=form.cleaned_data["prompt"],
+                input_format=form.cleaned_data["input_format"],
+                display_order=form.cleaned_data["display_order"],
+                reason=form.cleaned_data["reason"],
+                expected_revision=form.cleaned_data["revision"],
+            )
+            messages.success(request, result["message"])
+        except corrections.ServiceError as error:
+            messages.error(request, error.message)
+    else:
+        messages.error(request, "Check the form fields.")
+    return redirect("manage-content-edit", challenge_id=question.challenge_id)
+
+
+def _inline_question_forms(challenge):
+    forms = []
+    for question in challenge.questions.order_by("display_order", "id"):
+        form = InlineQuestionForm(initial={
+            "prompt": question.prompt,
+            "answers": "\n".join(AcceptedAnswer_values(question)),
+            "input_format": question.input_format,
+            "points": question.points,
+            "display_order": question.display_order,
+            "mode": "none",
+            "reason": "",
+            "revision": DataRevision.current(),
+        })
+        forms.append((question, form))
+    return forms
 
 
 @admin_page
@@ -245,6 +314,7 @@ def content_edit(request, challenge_id):
     challenge = get_object_or_404(Challenge.objects.prefetch_related("memberships__pool", "attachments"), pk=challenge_id)
     initial = {
         "title": challenge.title,
+        "author": challenge.author,
         "summary": challenge.summary,
         "description": challenge.description,
         "pools": [membership.pool for membership in challenge.memberships.all()],
@@ -262,9 +332,10 @@ def content_edit(request, challenge_id):
                 adminops.edit_content(
                     request.user, challenge,
                     title=form.cleaned_data["title"],
+                    author=form.cleaned_data["author"],
                     summary=form.cleaned_data["summary"],
                     description=form.cleaned_data["description"],
-                    pool_ids=form.cleaned_data["pools"],
+                    pool_ids=[pool.id for pool in form.cleaned_data["pools"]],
                     lifecycle=form.cleaned_data["lifecycle"],
                     go_live=go_live,
                     expected_revision=form.cleaned_data["revision"],
@@ -282,6 +353,7 @@ def content_edit(request, challenge_id):
         "challenge": challenge, "form": form, "upload_form": upload_form,
         "lab_template_form": LabTemplateForm(initial=_lab_template_initial(lab_template)),
         "lab_template": lab_template,
+        "question_forms": _inline_question_forms(challenge),
     })
 
 
@@ -459,8 +531,9 @@ def create_challenge(request):
                 challenge = adminops.create_challenge(
                     request.user,
                     title=form.cleaned_data["title"],
+                    author=form.cleaned_data["author"],
                     description=form.cleaned_data["description"],
-                    pool_id=form.cleaned_data["pool"].id,
+                    pool_ids=[pool.id for pool in form.cleaned_data["pools"]],
                     questions=questions,
                 )
                 messages.success(request, "Draft created. It is not visible to players.")
@@ -513,6 +586,7 @@ def _confirm_text(action, target):
         "distribute-template": ("Distribute this machine image to every workhorse?", "The pinned domain.xml and base disk are staged through the durable command queue; retries are idempotent. Reset any running lab using this version first — replacing template files under running guests is not safe."),
         "delete-template": ("Delete this machine image?", "The artifact and its uploaded disk are removed. Deletion is refused while any challenge template still pins this version."),
         "delete-pool": ("Delete this pool?", "The pool disappears from the challenge browser and its members lose this grouping. Challenges, scores, and progress are untouched."),
+        "revoke-preapproval": ("Revoke this pre-approval?", "The Discord ID no longer auto-approves at first sign-in. If an account already used the pre-approval, its access is untouched — suspend that account instead."),
     }
     return texts.get(action, ("Confirm action?", "Apply this operator action?"))
 
@@ -533,6 +607,7 @@ def _success_text(action):
         "distribute-template": "Distribution queued.",
         "delete-template": "Machine image deleted.",
         "delete-pool": "Pool deleted.",
+        "revoke-preapproval": "Pre-approval revoked.",
     }.get(action, "Action applied.")
 
 
@@ -567,6 +642,8 @@ def _perform_action(actor, action, target):
         lab_services.delete_machine_image(actor, int(target))
     elif action == "delete-pool":
         adminops.delete_pool(actor, int(target))
+    elif action == "revoke-preapproval":
+        adminops.revoke_preapproval(actor, target)
     else:
         raise adminops.ServiceError("Unknown administrator action.")
 

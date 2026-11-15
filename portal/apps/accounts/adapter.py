@@ -30,9 +30,14 @@ def _discord_profile(sociallogin):
 
 
 def _is_preapproved(discord_id):
-    return ApprovalDecision.objects.filter(
-        discord_id=discord_id, decision__in=("preapprove", "approve")
-    ).exists()
+    """A pre-approval stands unless the LATEST relevant ledger decision for
+    the ID is a revocation (append-only; revoke after upgrade cancels the
+    future auto-approval)."""
+    latest = ApprovalDecision.objects.filter(
+        discord_id=discord_id,
+        decision__in=("preapprove", "approve", "revoke-preapprove"),
+    ).order_by("-id").first()
+    return latest is not None and latest.decision in ("preapprove", "approve")
 
 
 class DiscordAccountAdapter(DefaultSocialAccountAdapter):

@@ -47,6 +47,7 @@ urlpatterns = [
     path("notifications/read", submission_views.mark_notifications_read, name="notifications-read"),
     path("manage/", manage_views.dashboard, name="manage"),
     path("manage/questions/<int:question_id>/edit", manage_views.question_edit, name="manage-question-edit"),
+    path("manage/questions/<int:question_id>/inline", manage_views.question_inline, name="manage-question-inline"),
     path("manage/hints/<int:hint_id>/edit", manage_views.hint_edit, name="manage-hint-edit"),
     path("manage/challenges/<int:challenge_id>/edit", manage_views.content_edit, name="manage-content-edit"),
     path("manage/challenges/<int:challenge_id>/attachments/upload", manage_views.upload_attachment, name="manage-attachment-upload"),

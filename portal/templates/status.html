@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% block title %}Account status — CTF Practice{% endblock %}
+{% block title %}Account status — J-TAC CTF Practice{% endblock %}
 {% block content %}
 <h1>{% if user.status == 'suspended' %}Access suspended{% elif user.status == 'rejected' %}Application rejected{% else %}Awaiting approval{% endif %}</h1>
 <p>You are signed in as {{ user.cached_name|default:user.discord_id }}.</p>

@@ -26,7 +26,7 @@ class ChallengeCreationTests(TestCase):
 
     def _create(self, questions=None, **overrides):
         kwargs = {
-            "title": "T", "pool_id": self.pool.id,
+            "title": "T", "pool_ids": [self.pool.id],
             "questions": questions if questions is not None else [
                 {"prompt": "p", "answers": ["a"], "points": 10},
             ],
@@ -77,7 +77,8 @@ class ChallengeCreationTests(TestCase):
     def test_creation_validation_negatives(self):
         for kwargs in (
             {"title": "   "},
-            {"pool_id": "not-a-pool"},
+            {"pool_ids": ["not-a-pool"]},
+            {"author": "x" * 101},
             {"questions": [{"prompt": "  ", "answers": ["a"], "points": 1}]},
             {"questions": [{"prompt": "p", "answers": ["  "], "points": 1}]},
             {"questions": [{"prompt": "p", "answers": ["a"], "points": -1}]},
@@ -91,10 +92,22 @@ class ChallengeCreationTests(TestCase):
     def test_poolless_draft_is_allowed_and_labeled(self):
         """A pool-less draft is valid at creation; the edit flow requires
         pools before anything is player-visible."""
-        challenge = self._create(pool_id=None)
+        challenge = self._create(pool_ids=[])
         self.assertEqual(challenge.memberships.count(), 0)
         with self.assertRaises(ServiceError):
             services._visible(challenge)  # drafts are invisible regardless
+
+    def test_create_in_multiple_pools_at_once(self):
+        second = Pool.objects.create(name="Second Pool", slug="second")
+        challenge = self._create(pool_ids=[self.pool.id, second.id], title="Dual")
+        self.assertEqual(
+            set(challenge.memberships.values_list("pool_id", flat=True)),
+            {self.pool.id, second.id},
+        )
+
+    def test_create_sets_display_author(self):
+        challenge = self._create(title="Credited", author=" Dana ")
+        self.assertEqual(challenge.author, "Dana")
 
 
 class LifecycleTests(TestCase):

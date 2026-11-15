@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% block title %}Administration — CTF Practice{% endblock %}
+{% block title %}Administration — J-TAC CTF Practice{% endblock %}
 {% block content %}
 <h1>Administration</h1>
 <p class="muted">Operator workbench. All actions are authorized by the admin flag, revision-guarded where applicable, and recorded in the audit log.</p>
@@ -23,6 +23,7 @@
           <span class="badge">account: {{ item.account_status }}</span>
         {% else %}
           <span class="badge">awaiting first sign-in</span>
+          <form method="post" action="{% url 'manage-action' %}">{% csrf_token %}<input type="hidden" name="action" value="revoke-preapproval"><input type="hidden" name="target" value="{{ item.decision.discord_id }}"><button class="btn small danger" type="submit">Revoke</button></form>
         {% endif %}
       </div>
     </div>
