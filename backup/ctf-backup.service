@@ -9,9 +9,10 @@ Wants=docker.service
 
 [Service]
 Type=oneshot
-# Needs docker access and (via WORKHORSE_SSH_TARGETS) the operator's SSH
-# keys for the template rsync. Adjust WorkingDirectory to the deployment
-# checkout on the controller.
+# server-setup.sh rewrites ExecStart with the absolute path of this
+# checkout's backup/backup.sh and installs this unit (ExecStart must be
+# absolute for systemd). Needs docker access and, via WORKHORSE_SSH_TARGETS,
+# the root user's SSH keys for the template rsync.
 ExecStart=backup/backup.sh
 
 [Install]

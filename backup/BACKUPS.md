@@ -21,16 +21,11 @@ Retention prunes each family independently to the newest
 ## Schedule (controller machine)
 
 ```bash
-sudo cp backup/ctf-backup.service backup/ctf-backup.timer /etc/systemd/system/
-sudo systemctl daemon-reload
-sudo systemctl enable --now ctf-backup.timer
+sudo ./server-setup.sh   # installs backup/ctf-backup.{service,timer} and
+                         # enables the timer (idempotent; also runs the
+                         # first backup if none exists yet)
 systemctl list-timers ctf-backup.timer   # next run
 ```
-
-Edit `ctf-backup.service`'s `WorkingDirectory` (or make `ExecStart` absolute)
-to point at the deployment checkout. Defaults come from `.env`
-(`BACKUP_DIR`, `BACKUP_RETENTION_DAYS`, `WORKHORSE_SSH_TARGETS`,
-`BACKUP_REMOTE_DEST` — see `.env.example`).
 
 Manual run: `backup/backup.sh` (idempotent; safe to run any time).
 

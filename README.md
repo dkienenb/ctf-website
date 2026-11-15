@@ -27,12 +27,15 @@ docker compose up -d db
 ## Deployed server (controller machine)
 
 ```bash
-cp .env.example .env   # GUACD_HOSTNAME is required — see the .env.example note
-docker compose up -d
+cp .env.example .env   # fill in: GUACD_HOSTNAME is required — see the note
+sudo ./server-setup.sh # idempotent: build+up, guacamole_db schema if missing,
+                       # portal check, daily backup timer + first backup
 ```
 
-Workhorse provisioning is a separate runbook: `agent/ADD-A-WORKHORSE.md`
-(firewall §17 + guacd included); clean rebuilds: `agent/REBUILD.md`.
+Re-run after `git pull` to update the deployment (migrations and
+collectstatic run in the app entrypoint). Workhorse provisioning is a
+separate runbook: `agent/ADD-A-WORKHORSE.md` (firewall §17 + guacd
+included); clean rebuilds: `agent/REBUILD.md`; backups: `backup/BACKUPS.md`.
 
 ## Build sequence (handoff §24)
 
