@@ -1,0 +1,22 @@
+{% extends "base.html" %}
+{% block title %}New challenge — Administration{% endblock %}
+{% block content %}
+<p><a href="{% url 'manage' %}">← Back to administration</a></p>
+<h1>New challenge</h1>
+<p class="muted small">Challenges start as drafts: invisible to players until you publish them. After creation you can add questions, alternate accepted answers, hints, files, a machine template, and pool memberships on the edit page.</p>
+
+<section class="panel">
+  <form method="post" class="stack-form">
+    {% csrf_token %}
+    {% for field in form %}
+      <div class="field">
+        <label for="{{ field.id_for_label }}">{{ field.label }}</label>
+        {{ field }}
+        {% if field.help_text %}<span class="muted small">{{ field.help_text }}</span>{% endif %}
+        {% for error in field.errors %}<span class="error">{{ error }}</span>{% endfor %}
+      </div>
+    {% endfor %}
+    <button class="btn primary" type="submit">Create draft</button>
+  </form>
+</section>
+{% endblock %}

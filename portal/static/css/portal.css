@@ -37,6 +37,9 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 .btn.danger { color: var(--danger); border-color: #e8908c55; }
 .button-row { display: flex; gap: 8px; flex-wrap: wrap; }
 .stack-form { display: flex; flex-direction: column; gap: 10px; max-width: 560px; }
+.field { display: flex; flex-direction: column; gap: 4px; }
+.field label { font-size: 12px; letter-spacing: 0.05em; color: var(--muted); text-transform: uppercase; }
+.field textarea, .field input, .field select { width: 100%; box-sizing: border-box; }
 .auth-card { max-width: 520px; margin: 70px auto; text-align: center; }
 .auth-card .btn { margin: 14px 0; }
 .btn.small { min-height: 32px; padding: 5px 10px; font-size: 12px; }

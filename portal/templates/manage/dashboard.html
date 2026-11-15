@@ -86,15 +86,7 @@
 
 <section class="panel">
   <h2>Content publishing</h2>
-  <form method="post" action="{% url 'manage-create-challenge' %}" class="stack-form">
-    {% csrf_token %}
-    <div class="filters">{{ create_form.title }} {{ create_form.pool }}</div>
-    {{ create_form.description }}
-    {{ create_form.prompt }}
-    {{ create_form.answer }}
-    {{ create_form.points }}
-    <button class="btn secondary" type="submit">Create draft</button>
-  </form>
+  <p><a class="btn primary" href="{% url 'manage-create-challenge' %}">New challenge</a></p>
   {% for challenge in challenges %}
     <div class="row">
       <div><strong>{{ challenge.title }}</strong>

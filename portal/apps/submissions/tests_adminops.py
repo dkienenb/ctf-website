@@ -7,7 +7,7 @@ from django.test import TestCase, override_settings
 from django.urls import reverse
 
 from portal.apps.accounts.models import ApprovalDecision, User
-from portal.apps.content.models import Challenge, Hint, Question
+from portal.apps.content.models import Challenge, Hint, Pool, Question
 from portal.apps.submissions import adminops, services
 from portal.apps.labs.models import LabInstance, QueueEntry
 from portal.apps.submissions.models import (
@@ -37,6 +37,31 @@ class OperatorServiceTests(TestCase):
         response = self.client.get(reverse("manage"))
         self.assertEqual(response.status_code, 200)
         self.assertContains(response, "Machine images")
+
+    def test_challenge_create_page_and_flow(self):
+        """Creation lives on its own labeled page; the dashboard links it."""
+        self.client.force_login(self.admin)
+        response = self.client.get(reverse("manage"))
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, reverse("manage-create-challenge"))
+
+        response = self.client.get(reverse("manage-create-challenge"))
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "<label")
+        self.assertContains(response, "First question — prompt")
+        self.assertContains(response, "accepted answer")
+        self.assertContains(response, "invisible to players until you publish")
+
+        pool = Pool.objects.create(name="Labeled pool", slug="labeled-pool")
+        response = self.client.post(reverse("manage-create-challenge"), {
+            "title": "Labeled challenge", "pool": pool.id,
+            "prompt": "p?", "answer": "a", "points": "50",
+        })
+        self.assertEqual(response.status_code, 302)
+        challenge = Challenge.objects.get(title="Labeled challenge")
+        self.assertEqual(challenge.lifecycle, Challenge.Lifecycle.DRAFT)
+        self.assertEqual(challenge.questions.count(), 1)
+        self.assertEqual(challenge.questions.first().points, 50)
 
     def setUp(self):
         self.admin = make_user("400000000000000001", "Admin", is_admin=True)

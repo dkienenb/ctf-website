@@ -56,12 +56,33 @@ class PreapproveForm(forms.Form):
 
 
 class CreateChallengeForm(forms.Form):
-    title = forms.CharField(max_length=200)
-    description = forms.CharField(widget=forms.Textarea(attrs={"rows": 3}), required=False)
-    pool = forms.ModelChoiceField(queryset=Pool.objects.all())
-    prompt = forms.CharField(max_length=1000)
-    answer = forms.CharField(max_length=4096)
-    points = forms.IntegerField(min_value=0, initial=100)
+    title = forms.CharField(
+        max_length=200,
+        help_text="Players see this in the challenge browser. You can rename it later.",
+    )
+    description = forms.CharField(
+        widget=forms.Textarea(attrs={"rows": 3}), required=False,
+        help_text="Markdown-ish flavor text shown on the challenge page. Optional.",
+    )
+    pool = forms.ModelChoiceField(
+        queryset=Pool.objects.all(),
+        help_text="Which pool the challenge appears in. Multiple pools can be assigned after creation.",
+    )
+    prompt = forms.CharField(
+        max_length=1000,
+        label="First question — prompt",
+        help_text="The first question players must answer. More questions can be added on the edit page.",
+    )
+    answer = forms.CharField(
+        max_length=4096,
+        label="First question — accepted answer",
+        widget=forms.Textarea(attrs={"rows": 2}),
+        help_text="Matching is exact against this value. Add alternate accepted answers after creation.",
+    )
+    points = forms.IntegerField(
+        min_value=0, initial=100,
+        help_text="Points this question is worth.",
+    )
 
 
 @admin_page
@@ -85,7 +106,6 @@ def dashboard(request):
         "labs": LabInstance.objects.select_related("host", "challenge").order_by("id"),
         "preapprovals": ApprovalDecision.objects.order_by("-id")[:20],
         "preapprove_form": PreapproveForm(),
-        "create_form": CreateChallengeForm(),
         "revision": DataRevision.current(),
     })
 
@@ -340,7 +360,9 @@ def create_challenge(request):
                 messages.error(request, error.message)
         else:
             messages.error(request, "Check the form fields.")
-    return redirect("manage")
+    else:
+        form = CreateChallengeForm()
+    return render(request, "manage/challenge_create.html", {"form": form})
 
 
 @admin_page
