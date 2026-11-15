@@ -270,6 +270,43 @@ class AgentExecutorTests(TestCase):
                                 "seq": 1, "total": 1, "data_b64": "aGVsbG8=", "sha256": sha},
                 })
 
+    def test_template_verify_checks_both_files(self):
+        """The verify step proves BOTH staged files against their own hashes;
+        a missing or tampered domain.xml refuses, not just the disk."""
+        import base64
+        import hashlib
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmp:
+            executor = self._executor(tmp)
+            disk_content, xml_content = b"disk-bytes", b"<domain>@NAME@</domain>"
+            disk_sha = hashlib.sha256(disk_content).hexdigest()
+            xml_sha = hashlib.sha256(xml_content).hexdigest()
+            for file_name, content, sha in (
+                ("disk-template", disk_content, disk_sha),
+                ("domain.xml", xml_content, xml_sha),
+            ):
+                workhorse_agent.execute(executor, {
+                    "op_id": f"tv-{file_name}", "operation": "template-put",
+                    "payload": {"role": "target", "version": "v9", "file": file_name,
+                                "seq": 1, "total": 1,
+                                "data_b64": base64.b64encode(content).decode("ascii"),
+                                "sha256": sha},
+                })
+            payload = {"role": "target", "version": "v9", "sha256": disk_sha,
+                       "size": len(disk_content), "xml_sha256": xml_sha}
+            detail = workhorse_agent.execute(executor, {
+                "op_id": "tv-ok", "operation": "template-verify", "payload": payload})
+            self.assertEqual(detail["verified"], "target/v9")
+            # Tampered xml refused.
+            bad = dict(payload, xml_sha256="0" * 64)
+            with self.assertRaises(workhorse_agent.AgentError):
+                workhorse_agent.execute(executor, {"op_id": "tv-bad", "operation": "template-verify", "payload": bad})
+            # Missing xml refused.
+            (executor.images_dir / "target" / "v9" / "domain.xml").unlink()
+            with self.assertRaises(workhorse_agent.AgentError):
+                workhorse_agent.execute(executor, {"op_id": "tv-missing", "operation": "template-verify", "payload": payload})
+
     def test_template_list_and_remove(self):
         import tempfile
 

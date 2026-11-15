@@ -233,14 +233,17 @@ class LibvirtExecutor:
         return {"staged": f"{role}/{version}/{file_name}", "complete": True, "bytes": total_bytes}
 
     def template_verify(self, command):
-        """Prove a staged version matches what the controller pinned (§13)."""
+        """Prove a staged version matches what the controller pinned (§13):
+        both the base disk and the pinned domain.xml, each against its own
+        content hash."""
         payload = command["payload"]
         role = payload.get("role", "")
         version = payload.get("version", "")
         expected_sha = str(payload.get("sha256", ""))
         if not re.fullmatch(r"[0-9a-f]{64}", expected_sha):
             raise AgentError("template-verify requires a 64-hex sha256")
-        disk = self.template_dir(role, version) / "disk-template"
+        directory = self.template_dir(role, version)
+        disk = directory / "disk-template"
         if not disk.exists():
             raise AgentError(f"staged template missing: {disk}")
         hasher = hashlib.sha256()
@@ -254,6 +257,19 @@ class LibvirtExecutor:
         expected_size = int(payload.get("size", size))
         if expected_size and size != expected_size:
             raise AgentError(f"staged disk-template size mismatch for {role}/{version}: {size} != {expected_size}")
+        xml_sha = str(payload.get("xml_sha256", ""))
+        if xml_sha:
+            if not re.fullmatch(r"[0-9a-f]{64}", xml_sha):
+                raise AgentError("template-verify xml_sha256 must be 64-hex")
+            xml_path = directory / "domain.xml"
+            if not xml_path.exists():
+                raise AgentError(f"staged template missing: {xml_path}")
+            xml_hasher = hashlib.sha256()
+            with xml_path.open("rb") as src:
+                for block in iter(lambda: src.read(1024 * 1024), b""):
+                    xml_hasher.update(block)
+            if xml_hasher.hexdigest() != xml_sha:
+                raise AgentError(f"staged domain.xml hash mismatch for {role}/{version}")
         return {"verified": f"{role}/{version}", "bytes": size}
 
     def template_remove(self, command):

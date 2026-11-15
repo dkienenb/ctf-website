@@ -410,13 +410,16 @@ def set_host_online(actor, host_id, online):
 # --- Machine template authoring (§10, §13) ------------------------------------
 
 DOMAIN_PLACEHOLDERS = ("@NAME@", "@DISK@", "@VNC_PORT@", "@LAB_NET@")
+TARGET_PLACEHOLDERS = ("@NAME@", "@DISK@", "@LAB_NET@")  # targets are never streamed
 _SAFE_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,79}$")
 STAGE_CHUNK_BYTES = 2 * 1024 * 1024
 
 
-def validate_domain_xml(domain_xml):
-    """A pinned template must carry every placeholder the agent substitutes."""
-    problems = [p for p in DOMAIN_PLACEHOLDERS if p not in domain_xml]
+def validate_domain_xml(domain_xml, role=None):
+    """A pinned template must carry every placeholder the agent substitutes.
+    Target templates are never streamed, so they need no @VNC_PORT@."""
+    required = DOMAIN_PLACEHOLDERS if role != MachineImage.Role.TARGET else TARGET_PLACEHOLDERS
+    problems = [p for p in required if p not in domain_xml]
     if problems:
         raise ServiceError(
             "domain.xml is missing required placeholders: " + ", ".join(problems), 400
@@ -442,7 +445,7 @@ def save_machine_image(actor, *, role, version, domain_xml, notes="", disk=None)
     if role not in MachineImage.Role.values:
         raise ServiceError("Role must be attacker or target.", 400)
     validate_version(version)
-    validate_domain_xml(domain_xml or "")
+    validate_domain_xml(domain_xml or "", role)
 
     with transaction.atomic():
         image, created = MachineImage.objects.select_for_update().get_or_create(
@@ -528,6 +531,7 @@ def distribute_machine_image(actor, image_id):
         image.save(update_fields=("disk_sha256",))
 
     xml_bytes = image.domain_xml.encode("utf-8")
+    xml_sha = hashlib.sha256(xml_bytes).hexdigest()
     issued = 0
 
     def stage(host, op_id, operation, payload):
@@ -546,11 +550,14 @@ def distribute_machine_image(actor, image_id):
 
     for host in hosts:
         blob = base64.b64encode(xml_bytes).decode("ascii")
-        stage(host, f"tpl-{staged_sha[:16]}-{host.id}-domain",
+        # The XML carries ITS OWN hash: the agent verifies every file against
+        # the sha of its own content, not the disk's (caught live: domain.xml
+        # was rejected on every transfer because it rode the disk's sha).
+        stage(host, f"tpl-{xml_sha[:16]}-{host.id}-domain",
               "template-put", {
                   "role": image.role, "version": image.version,
                   "file": "domain.xml", "seq": 1, "total": 1,
-                  "data_b64": blob, "sha256": staged_sha,
+                  "data_b64": blob, "sha256": xml_sha,
               })
         issued += 1
         for seq, chunk in enumerate(chunks, start=1):
@@ -561,10 +568,11 @@ def distribute_machine_image(actor, image_id):
                       "data_b64": chunk, "sha256": staged_sha,
                   })
             issued += 1
-        stage(host, f"tpl-{staged_sha[:16]}-{host.id}-done",
+        stage(host, f"tpl-{staged_sha[:16]}-{xml_sha[:8]}-{host.id}-done",
               "template-verify", {
                   "role": image.role, "version": image.version,
                   "sha256": staged_sha, "size": image.disk_size,
+                  "xml_sha256": xml_sha,
               })
         issued += 1
     DataRevision.bump()

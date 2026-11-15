@@ -70,6 +70,12 @@ class MachineImageServiceTests(TestCase):
         self.assertEqual(puts.filter(payload__file="disk-template").count(), expected_chunks)
         verify = HostCommand.objects.get(operation="template-verify")
         self.assertEqual(verify.payload["sha256"], image.disk_sha256)
+        # The XML rides its own content hash (live bug: it rode the disk's).
+        domain_put = puts.get(payload__file="domain.xml")
+        import hashlib as _h
+        self.assertEqual(domain_put.payload["sha256"],
+                         _h.sha256(image.domain_xml.encode()).hexdigest())
+        self.assertEqual(verify.payload["xml_sha256"], domain_put.payload["sha256"])
 
         # Re-distribution issues nothing new (idempotent op ids).
         again = services.distribute_machine_image(self.admin, image.id)
