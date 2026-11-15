@@ -50,5 +50,11 @@ Workhorse provisioning is a separate runbook: `agent/ADD-A-WORKHORSE.md`
       (`worker/DESKTOP-DEBUG.md`)
 - [x] Steps 7 (isolation): per-lab libvirt networks + host firewall +
       `agent/verify-isolation.sh` audit; guest-side probes documented there
-- [ ] Steps 7 (backups) / 8: launch content; real Kali/target templates are
-      owner-supplied (demo templates in `agent/demo-images/` until then)
+- [x] Steps 7 (backups): PostgreSQL (app + guacamole_db), attachments volume,
+      and pinned-template backups with 14-day retention, restore, and a
+      restore drill proving gate §22.39 (`backup/BACKUPS.md`; owner policy:
+      local-only, daily, log-file alerting). Deployed controller still needs
+      the timer installed (`backup/ctf-backup.timer`) and
+      `WORKHORSE_SSH_TARGETS` set in `.env`.
+- [ ] Step 8: launch content; real Kali/target templates are owner-supplied
+      (demo templates in `agent/demo-images/` until then)

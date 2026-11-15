@@ -6,3 +6,4 @@ db.sqlite3
 instance/
 node_modules/
 private_attachments/
+backups/

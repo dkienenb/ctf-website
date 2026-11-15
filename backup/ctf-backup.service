@@ -1,0 +1,18 @@
+# CTF portal backup job (controller machine). Runs backup/backup.sh daily.
+# Owner policy (2026-11-15): local-only destination, 14-day retention,
+# log-file alerting (backup.log + nonzero exit; check `systemctl status`).
+# See backup/BACKUPS.md for the runbook and the restore drill.
+[Unit]
+Description=CTF portal backup (PostgreSQL + attachments + templates)
+After=docker.service network-online.target
+Wants=docker.service
+
+[Service]
+Type=oneshot
+# Needs docker access and (via WORKHORSE_SSH_TARGETS) the operator's SSH
+# keys for the template rsync. Adjust WorkingDirectory to the deployment
+# checkout on the controller.
+ExecStart=backup/backup.sh
+
+[Install]
+WantedBy=multi-user.target
