@@ -146,11 +146,18 @@ class LibvirtExecutor:
                 # always rebuilt because no direct target access is allowed.
                 if role == "attacker":
                     state = self.domain_state(name)
-                    if state != "running":
-                        self.virsh("start", name)
-                    continue
-                self.virsh_tolerant("destroy", name)
-                self.virsh_tolerant("undefine", name)
+                    port = self.vnc_port_of(name)
+                    if state == "running" and port == vnc_port:
+                        continue  # definition matches; preserve untouched
+                    # Stale definition (e.g. pre-dating per-lab ports): rebuild.
+                    self.virsh_tolerant("destroy", name)
+                    self.virsh_tolerant("undefine", name)
+                    disk = self.disks_dir / f"{name}.qcow2"
+                    if disk.exists():
+                        disk.unlink()
+                else:
+                    self.virsh_tolerant("destroy", name)
+                    self.virsh_tolerant("undefine", name)
             xml = (domain_xml.read_text()
                    .replace("@DISK@", str(disk_source))
                    .replace("@NAME@", name)
@@ -169,6 +176,19 @@ class LibvirtExecutor:
             capture_output=True, text=True, timeout=60,
         )
         return result.stdout.strip().lower() if result.returncode == 0 else "unknown"
+
+    def vnc_port_of(self, name):
+        """Actual VNC port of a defined domain ('vnc://127.0.0.1:1' → 5901)."""
+        import re
+
+        result = subprocess.run(
+            ["virsh", "--connect", self.uri, "domdisplay", name],
+            capture_output=True, text=True, timeout=60,
+        )
+        if result.returncode != 0:
+            return "unknown"
+        match = re.search(r":(\d+)$", result.stdout.strip())
+        return str(5900 + int(match.group(1))) if match else "unknown"
 
     def _ensure_disk(self, source, template_disk, payload):
         """Per-instance writable disk backed by the versioned base image (§10)."""
