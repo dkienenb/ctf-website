@@ -30,6 +30,11 @@ CSRF_TRUSTED_ORIGINS = [o for o in env("CSRF_TRUSTED_ORIGINS", "").split(",") if
 CSRF_COOKIE_HTTPONLY = False  # allauth/JS may need to read the token
 SESSION_COOKIE_HTTPONLY = True
 SESSION_COOKIE_SAMESITE = "Lax"
+# Enable before public launch (DJANGO_COOKIE_SECURE=1): the public path is
+# HTTPS-only via Cloudflare, but LAN testing over plain HTTP needs cookies
+# to flow, so this is env-gated rather than unconditional.
+SESSION_COOKIE_SECURE = env("DJANGO_COOKIE_SECURE", "0") == "1"
+CSRF_COOKIE_SECURE = env("DJANGO_COOKIE_SECURE", "0") == "1"
 X_FRAME_OPTIONS = "DENY"
 SECURE_CONTENT_TYPE_NOSNIFF = True
 REFERRER_POLICY = "same-origin"
