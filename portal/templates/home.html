@@ -28,6 +28,7 @@
         {% for membership_pool in row.pools %}<a class="pool-link" href="{% url 'pool' membership_pool.slug %}">{{ membership_pool.name }}</a>{% endfor %}
       </div>
       <p class="muted small">{{ row.solved_count }}/{{ row.total }} questions solved</p>
+      <a class="card-overlay" href="{% url 'challenge_detail' row.challenge.slug %}" aria-label="Open challenge: {{ row.challenge.title }}"></a>
     </article>
   {% empty %}
     <p>No challenges match.</p>

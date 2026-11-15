@@ -29,9 +29,24 @@ fail() { echo "==> FATAL: $*" >&2; exit 1; }
 
 # --- 1. .env -------------------------------------------------------------------
 if [[ ! -f .env ]]; then
+  log "Creating .env from .env.example with generated credentials"
   cp .env.example .env
-  log "Created .env from .env.example."
-  log "Fill it in (GUACD_HOSTNAME, secrets, Discord OAuth, CSRF origins) and re-run."
+  # Generated once at bootstrap; never rewritten on re-runs (rotating
+  # DJANGO_SECRET_KEY invalidates sessions, and POSTGRES_PASSWORD must
+  # match the initialized database volume).
+  DJANGO_SECRET_KEY="$(python3 -c 'import secrets; print(secrets.token_hex(32))')"
+  GUACAMOLE_JSON_SECRET="$(python3 -c 'import secrets; print(secrets.token_hex(16))')"
+  GUACAMOLE_DB_PASSWORD="$(python3 -c 'import secrets; print(secrets.token_urlsafe(24))')"
+  POSTGRES_PASSWORD="$(python3 -c 'import secrets; print(secrets.token_urlsafe(24))')"
+  sed -i \
+    -e "s|^DJANGO_SECRET_KEY=.*|DJANGO_SECRET_KEY=${DJANGO_SECRET_KEY}|" \
+    -e "s|^GUACAMOLE_JSON_SECRET=.*|GUACAMOLE_JSON_SECRET=${GUACAMOLE_JSON_SECRET}|" \
+    -e "s|^GUACAMOLE_DB_PASSWORD=.*|GUACAMOLE_DB_PASSWORD=${GUACAMOLE_DB_PASSWORD}|" \
+    -e "s|^POSTGRES_PASSWORD=.*|POSTGRES_PASSWORD=${POSTGRES_PASSWORD}|" \
+    .env
+  chmod 600 .env
+  log "Generated: DJANGO_SECRET_KEY, GUACAMOLE_JSON_SECRET, GUACAMOLE_DB_PASSWORD, POSTGRES_PASSWORD."
+  log "Still to fill in by hand: DISCORD_CLIENT_ID/SECRET, CSRF_TRUSTED_ORIGINS, GUACD_HOSTNAME."
   exit 1
 fi
 set -a; source .env; set +a
