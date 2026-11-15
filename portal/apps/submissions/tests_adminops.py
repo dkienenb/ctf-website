@@ -4,6 +4,7 @@ import uuid
 
 from django.core.management.base import CommandError
 from django.test import TestCase, override_settings
+from django.urls import reverse
 
 from portal.apps.accounts.models import ApprovalDecision, User
 from portal.apps.content.models import Challenge, Hint, Question
@@ -19,6 +20,24 @@ from .tests import make_question, make_user
 
 @override_settings(SUBMISSION_COOLDOWN_SECONDS=0)
 class OperatorServiceTests(TestCase):
+    def test_dashboard_renders_with_hint_redemptions(self):
+        """Regression: the dashboard crashed with AttributeError on the first
+        HintRedemption (recipient_id vs the model's user field)."""
+        challenge = self._challenge()
+        hint = Hint.objects.create(challenge_id=challenge.id, description="d", text="t", cost=10)
+        services.redeem(self.user, hint.id)
+        self.client.force_login(self.admin)
+        response = self.client.get(reverse("manage"))
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Refund first owner")
+
+    def test_dashboard_renders_with_machine_images(self):
+        """The dashboard links the machine-image workbench."""
+        self.client.force_login(self.admin)
+        response = self.client.get(reverse("manage"))
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Machine images")
+
     def setUp(self):
         self.admin = make_user("400000000000000001", "Admin", is_admin=True)
         self.user = make_user("400000000000000002", "Alex")

@@ -74,7 +74,7 @@ def dashboard(request):
         hints.append({
             "hint": hint,
             "owners": len(redemptions),
-            "first_owner_id": redemptions[0].recipient_id if redemptions else None,
+            "first_owner_id": redemptions[0].user_id if redemptions else None,
         })
     challenges = Challenge.objects.prefetch_related("memberships__pool").order_by("id")
     return render(request, "manage/dashboard.html", {
