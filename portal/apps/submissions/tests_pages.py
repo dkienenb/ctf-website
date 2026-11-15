@@ -122,7 +122,7 @@ class PageFlowTests(TestCase):
                 id=1, host=__import__("types").SimpleNamespace(management_ip="10.0.0.5")))
         from urllib.parse import unquote
 
-        data = unquote(url.split("data=")[1])
+        data = unquote(url.split("data=")[1].split("#")[0])
         key = bytes.fromhex(secret)
         decryptor = Cipher(algorithms.AES(key), modes.CBC(b"\x00" * 16)).decryptor()
         padded = base64.b64decode(data)
