@@ -60,30 +60,26 @@ services:
     depends_on:
       - app
 
-  guacd:
-    image: guacamole/guacd:1.6.0
-    # Reaches the attacker VM's VNC listener on the host via the docker gateway.
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
-
   guacamole:
     image: guacamole/guacamole:1.6.0
     depends_on:
-      - db
-      - guacd
+      db:
+        condition: service_healthy
     environment:
       WEBAPP_CONTEXT: ROOT
-      # guacd routing is environment-wide in Guacamole 1.6.0 — per-connection
-      # guacd-hostname/guacd-port parameters in grants/connections are ignored.
-      # Default to the single installed workhorse's guacd (workhorse-02); the
-      # VNC hop then reaches the guest over that host's loopback.
-      GUACD_HOSTNAME: ${GUACD_HOSTNAME:-guacd}
+      # REQUIRED, no default: the guacd that terminates desktop sessions is
+      # the per-workhorse guacd (agent/guacd-install.sh), co-located with the
+      # lab VMs. Guacamole 1.6.0 has no per-connection guacd routing — grants
+      # cannot redirect it — so this is deployment-wide (see .env.example).
+      # A compose-local guacd cannot reach the guests' VNC (host loopback),
+      # so none is defined here.
+      GUACD_HOSTNAME: ${GUACD_HOSTNAME:?set GUACD_HOSTNAME in .env — the workhorse guacd address}
       POSTGRESQL_HOSTNAME: db
       POSTGRESQL_DATABASE: guacamole_db
-      POSTGRESQL_USER: guacamole
+      POSTGRESQL_USERNAME: guacamole
       POSTGRESQL_PASSWORD: ${GUACAMOLE_DB_PASSWORD:-guacpw}
       JSON_SECRET_KEY: ${GUACAMOLE_JSON_SECRET:-}
-      LOGBACK_LEVEL: info
+      LOG_LEVEL: info
     volumes:
       - ./guac/extensions:/root/.guacamole/extensions:ro
 

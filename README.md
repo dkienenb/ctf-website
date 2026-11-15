@@ -7,8 +7,11 @@ decisions in `../ctf-prototype/docs/DECISIONS.md` (2026-11-14).
 ## Stack
 
 - Django 5.2 LTS + django-allauth 65 (Discord provider, identify scope only)
-- PostgreSQL 17 (authoritative database; `compose.yaml` runs it for development)
-- Later: Caddy, Guacamole/guacd, Cloudflare Worker proxy, lab controller/agents
+- PostgreSQL 17 (authoritative database; `compose.yaml` runs it)
+- Caddy gateway (portal + Guacamole WebSocket path) behind a Cloudflare
+  Tunnel/Worker proxy (`worker/`)
+- Guacamole 1.6.0 (JSON auth extension) + per-workhorse `guacd` on the host
+  network; per-lab isolated libvirt networks on the workhorses (`agent/`)
 
 ## Development
 
@@ -21,17 +24,31 @@ docker compose up -d db
 .venv/bin/python manage.py runserver
 ```
 
+## Deployed server (controller machine)
+
+```bash
+cp .env.example .env   # GUACD_HOSTNAME is required — see the .env.example note
+docker compose up -d
+```
+
+Workhorse provisioning is a separate runbook: `agent/ADD-A-WORKHORSE.md`
+(firewall §17 + guacd included); clean rebuilds: `agent/REBUILD.md`.
+
 ## Build sequence (handoff §24)
 
 - [x] Steps 4–5: authoritative application — accounts/approval, Discord identity,
       pools, challenges, questions, accepted answers, submissions, hints,
       scoring, corrections engine, operator pages
 - [x] Step 6 (application side): allocation, queue, leases, warnings, host
-      outage handling, scheduler command — database-constraint enforced;
-      real host agents/libvirt remain
+      outage handling, scheduler command — database-constraint enforced
 - [x] Packaging: Docker image (gunicorn), compose stack (db + app + lab-tick +
-      Caddy gateway), Worker proxy scaffold
-- [ ] Steps 1–3: connectivity proof (workers.dev + VPC + Tunnel), one Guacamole
-      desktop + isolated target, coordinated save/resume
-- [ ] Steps 6 (infrastructure): workhorse agents, Guacamole grants, recovery
-- [ ] Steps 7–8: isolation/backup verification, launch content
+      Caddy gateway), Worker proxy
+- [x] Steps 1–3: connectivity proof (workers.dev + VPC + Tunnel) — §15 checks
+      in `worker/PROOF-RESULTS.md`
+- [x] Steps 6 (infrastructure): workhorse agents, Guacamole grants, recovery;
+      browser desktop streams end-to-end over workers.dev
+      (`worker/DESKTOP-DEBUG.md`)
+- [x] Steps 7 (isolation): per-lab libvirt networks + host firewall +
+      `agent/verify-isolation.sh` audit; guest-side probes documented there
+- [ ] Steps 7 (backups) / 8: launch content; real Kali/target templates are
+      owner-supplied (demo templates in `agent/demo-images/` until then)
