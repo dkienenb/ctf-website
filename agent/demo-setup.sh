@@ -41,25 +41,12 @@ for role in attacker target; do
   fi
 done
 
-echo "==> Ensuring the private demo lab network (NAT, per-lab isolation lands with the isolation work)"
-if ! virsh --connect qemu:///system net-info ctf-demo-lab >/dev/null 2>&1; then
-  cat > /tmp/ctf-demo-lab.xml <<'NETXML'
-<network>
-  <name>ctf-demo-lab</name>
-  <forward mode='nat'/>
-  <ip address='192.168.100.1' netmask='255.255.255.0'>
-    <dhcp start='192.168.100.10' end='192.168.100.200'/>
-  </ip>
-</network>
-NETXML
-  virsh --connect qemu:///system net-define /tmp/ctf-demo-lab.xml
-  rm -f /tmp/ctf-demo-lab.xml
-fi
-virsh --connect qemu:///system net-autostart ctf-demo-lab
-virsh --connect qemu:///system net-start ctf-demo-lab 2>/dev/null || true
+echo "==> Lab networks are per-lab now (§17): the agent defines ctflab<N>"
+echo "    networks on demand; no shared ctf-demo-lab is created. After every"
+echo "    lab has been reset off the old shared network, remove it with:"
+echo "    virsh net-destroy ctf-demo-lab && virsh net-undefine ctf-demo-lab"
 
 chown -R ctf-agent:ctf-agent "$IMAGES" "$DISKS"
 
-echo "==> Demo templates ready:"
-virsh --connect qemu:///system net-info ctf-demo-lab | head -2
+echo "==> Demo templates ready (domains attach to per-lab ctflab<N> networks):"
 ls -la "$IMAGES/attacker" "$IMAGES/target"

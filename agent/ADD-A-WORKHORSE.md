@@ -93,7 +93,21 @@ print(h.online, h.last_heartbeat, h.free_disk_gb, '/', h.total_disk_gb, 'GB', h.
 
 A fresh heartbeat with resources and `admits=True` means the host is live.
 
-## 8. Install base images (owner-supplied launch content)
+## 8. Host firewall (§17 isolation) — run once per workhorse
+
+```sh
+cd /opt/ctf/website/agent
+sudo ./isolation-install.sh   # idempotent; persists via iptables-persistent
+sudo ./guacd-install.sh       # per-workhorse guacd on host network (desktops)
+sudo ./demo-setup.sh          # demo templates (owner-supplied templates later)
+```
+
+Per-lab libvirt networks (`ctf-lab<N>-net`, subnet `10.<lab>.0.0/24`) are
+created by the agent on demand; this ruleset blocks lab→host, lab→other
+labs, and lab→home/mgmt LAN. Audit any time with
+`sudo ./verify-isolation.sh` and its guest-side probe list.
+
+## 9. Install base images (owner-supplied launch content)
 
 Each role needs two files; missing templates make allocations fail loudly
 (never silently replaced — handoff §13):
@@ -108,7 +122,7 @@ rsync -av images/target/   "$HOST_NAME":/var/lib/libvirt/images/ctf/images/targe
 sudo chown -R ctf-agent:ctf-agent /var/lib/libvirt/images/ctf/images
 ```
 
-## 9. First real allocation test
+## 10. First real allocation test
 
 Create a challenge with a lab template on the portal, request + claim its lab
 from a player account, and confirm on the workhorse:

@@ -39,6 +39,12 @@ DOMAIN_PREFIX = "ctf"
 HEARTBEAT_INTERVAL = 10
 POLL_INTERVAL = 5
 DEADLINE_CHECK_INTERVAL = 5
+# §17: one isolated libvirt network per lab. Subnets are lab-keyed and
+# deterministic (10.<lab>.0.0/24), so every workhorse derives the same
+# topology and the host firewall can key on the range as a whole.
+LAB_NET_PREFIX = "ctf-lab"
+LAB_NET_SUFFIX = "-net"
+LAB_SUBNET_LIMIT = 250  # 10.<lab>.0.0/24; a host never hosts this many labs anyway
 
 try:
     import tomllib
@@ -104,6 +110,72 @@ class LibvirtExecutor:
 
     # --- operations -----------------------------------------------------
 
+    def lab_net(self, lab_id):
+        """Per-lab isolated network name/subnet (§17). Deterministic."""
+        try:
+            lab_id = int(lab_id)
+        except (TypeError, ValueError):
+            raise AgentError("lab id missing or invalid in command payload")
+        if not 1 <= lab_id <= LAB_SUBNET_LIMIT:
+            raise AgentError(f"lab id {lab_id} outside the per-lab subnet range")
+        name = f"{LAB_NET_PREFIX}{lab_id}{LAB_NET_SUFFIX}"
+        return {
+            "name": name,
+            "bridge": f"ctflab{lab_id}br0",
+            "gateway": f"10.{lab_id}.0.1",
+            "subnet": f"10.{lab_id}.0.0/24",
+            "dhcp_start": f"10.{lab_id}.0.10",
+            "dhcp_end": f"10.{lab_id}.0.200",
+        }
+
+    def _ensure_lab_net(self, lab_id):
+        """Define/start this lab's isolated network if not already active.
+
+        Cross-lab and lab-to-host isolation is enforced by the host firewall
+        (isolation-install.sh) plus libvirt's own per-network FORWARD rules;
+        the agent never touches iptables (it runs without CAP_NET_ADMIN).
+        """
+        net = self.lab_net(lab_id)
+        result = subprocess.run(
+            ["virsh", "--connect", self.uri, "net-info", net["name"]],
+            capture_output=True, text=True, timeout=60,
+        )
+        if result.returncode == 0 and "Active:     yes" in result.stdout:
+            return net
+        xml = (
+            "<network>\n"
+            f"  <name>{net['name']}</name>\n"
+            f"  <bridge name='{net['bridge']}' stp='off' delay='0'/>\n"
+            "  <forward mode='nat'/>\n"
+            f"  <ip address='{net['gateway']}' netmask='255.255.255.0'>\n"
+            "    <dhcp>\n"
+            f"      <range start='{net['dhcp_start']}' end='{net['dhcp_end']}'/>\n"
+            "    </dhcp>\n"
+            "  </ip>\n"
+            "</network>\n"
+        )
+        xml_path = self.disks_dir / f"{net['name']}.xml"
+        xml_path.write_text(xml)
+        if result.returncode != 0:
+            self.virsh("net-define", str(xml_path))
+        self.virsh_tolerant("net-autostart", net["name"])
+        self.virsh_tolerant("net-start", net["name"])
+        return net
+
+    def _domain_network(self, name):
+        """Source network of a defined domain ('' when unknown)."""
+        result = subprocess.run(
+            ["virsh", "--connect", self.uri, "dumpxml", name],
+            capture_output=True, text=True, timeout=60,
+        )
+        if result.returncode != 0:
+            return ""
+        for line in result.stdout.splitlines():
+            line = line.strip()
+            if line.startswith("<source network="):
+                return line.split('"')[1]
+        return ""
+
     def _names(self, command):
         base = _domain_base(command)
         return f"ctf-{base}-atk", f"ctf-{base}-tgt", self.disks_dir / f"saved-{base}"
@@ -128,10 +200,15 @@ class LibvirtExecutor:
     def _allocate_pair(self, payload, saved_dir, attacker, target, defined):
         if (saved_dir / "attacker.save").exists():
             # Resume saved execution state rather than a fresh boot (§12).
+            # NOTE: a lab saved before the per-lab network migration resumes
+            # on its saved network; move it with an admin reset-full.
             if (saved_dir / "target.save").exists():
                 self.virsh("restore", str(saved_dir / "target.save"))
             self.virsh("restore", str(saved_dir / "attacker.save"))
             return {"domains": [attacker, target], "resumed": True}
+        lab = payload.get("lab")
+        net = self._ensure_lab_net(lab)
+        expected_net = net["name"]
         template = self.images_dir / "attacker"
         target_template = self.images_dir / "target"
         vnc_port = str(payload.get("vnc_port", "5900"))
@@ -147,9 +224,10 @@ class LibvirtExecutor:
                 if role == "attacker":
                     state = self.domain_state(name)
                     port = self.vnc_port_of(name)
-                    if state == "running" and port == vnc_port:
+                    if state == "running" and port == vnc_port \
+                            and self._domain_network(name) == expected_net:
                         continue  # definition matches; preserve untouched
-                    # Stale definition (e.g. pre-dating per-lab ports): rebuild.
+                    # Stale definition (pre-dating per-lab ports or networks).
                     self.virsh_tolerant("destroy", name)
                     self.virsh_tolerant("undefine", name)
                     disk = self.disks_dir / f"{name}.qcow2"
@@ -161,7 +239,8 @@ class LibvirtExecutor:
             xml = (domain_xml.read_text()
                    .replace("@DISK@", str(disk_source))
                    .replace("@NAME@", name)
-                   .replace("@VNC_PORT@", vnc_port))
+                   .replace("@VNC_PORT@", vnc_port)
+                   .replace("@LAB_NET@", expected_net))
             xml_path = self.disks_dir / f"{name}.xml"
             xml_path.write_text(xml)
             self._ensure_disk(disk_source, directory / "disk-template", payload)

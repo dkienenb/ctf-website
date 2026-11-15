@@ -24,6 +24,11 @@ done
 echo "==> Removing the demo lab network"
 virsh --connect qemu:///system net-destroy ctf-demo-lab 2>/dev/null || true
 virsh --connect qemu:///system net-undefine ctf-demo-lab 2>/dev/null || true
+# per-lab §17 networks (harmless if none defined yet)
+for net in $(virsh --connect qemu:///system net-list --all --name 2>/dev/null | grep '^ctf-lab[0-9]*-net$' || true); do
+  virsh --connect qemu:///system net-destroy "$net" 2>/dev/null || true
+  virsh --connect qemu:///system net-undefine "$net" 2>/dev/null || true
+done
 
 echo "==> Removing storage, agent install, and config"
 rm -rf /var/lib/libvirt/images/ctf

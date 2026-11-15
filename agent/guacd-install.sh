@@ -27,9 +27,9 @@ docker run -d --name ctf-guacd --restart unless-stopped \
   --network host guacamole/guacd:1.6.0
 
 echo "==> Firewall guard: lab guests may not reach guacd"
-iptables -I INPUT -s 192.168.100.0/24 -p tcp --dport 4822 -j DROP 2>/dev/null || true
-iptables -C INPUT -s 192.168.100.0/24 -p tcp --dport 4822 -j DROP 2>/dev/null || \
-  iptables -I INPUT -s 192.168.100.0/24 -p tcp --dport 4822 -j DROP
+# The ctflab+ INPUT drop installed by isolation-install.sh covers this; the
+# old demo-subnet rule (192.168.100.0/24) is obsolete after the per-lab
+# network migration and is no longer added here.
 
 echo "==> Set management_ip = \"$MGMT_IP\" in /etc/ctf/agent.toml and restart the agent."
 echo "==> guacd is running; the controller reaches it at $MGMT_IP:4822."

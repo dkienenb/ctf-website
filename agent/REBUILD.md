@@ -10,9 +10,11 @@ On the workhorse (this works identically on workhorse-01 and workhorse-02):
 
 ```sh
 cd ~/ctf-website && git pull
-sudo ./agent/wipe.sh          # removes agent, config, VMs, demo network, storage
+sudo ./agent/wipe.sh          # removes agent, config, VMs, demo storage
 sudo ./agent/install.sh       # reinstalls agent + storage dirs (idempotent)
-sudo ./agent/demo-setup.sh    # demo templates + private network
+sudo ./agent/demo-setup.sh    # demo templates (per-lab networks are agent-created)
+sudo ./agent/isolation-install.sh  # §17 host firewall (idempotent)
+sudo ./agent/guacd-install.sh      # per-workhorse guacd on host network
 sudo systemctl restart ctf-agent
 ```
 
