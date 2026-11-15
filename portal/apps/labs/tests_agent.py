@@ -130,6 +130,7 @@ class AgentExecutorTests(TestCase):
                 source.write_bytes(b"disk")
 
         executor = RecordingExecutor(None)
+        executor.uri = "qemu://test"
         executor.images_dir = Path(tmp) / "images"
         executor.disks_dir = Path(tmp) / "disks"
         executor.disks_dir.mkdir(parents=True)
@@ -228,6 +229,7 @@ class AgentExecutorTests(TestCase):
                 directory.mkdir(parents=True)
                 (directory / "domain.xml").write_text("<domain><name>@NAME@</name><disk>@DISK@</disk></domain>")
             executor.existing = {"ctf-lab9-atk"}
+            executor.vnc_port_of = lambda name: "5900" if name in executor.existing else "unknown"
             command = {"op_id": "op-x", "operation": "allocate", "payload": {"lab": 9}, "lab": 9}
             detail = workhorse_agent.execute(executor, command)
             self.assertFalse(detail["resumed"])
