@@ -35,6 +35,10 @@ rm -rf /var/lib/libvirt/images/ctf
 rm -rf /opt/ctf/agent
 rm -f /etc/ctf/agent.toml /etc/ctf/tunnel-token
 
+echo "==> Removing the per-workhorse guacd container"
+docker rm -f ctf-guacd 2>/dev/null || true
+
 echo "==> Workhorse wiped."
 echo "    To bring it back: sudo ./install.sh && sudo ./demo-setup.sh,"
+echo "    sudo ./isolation-install.sh && sudo ./guacd-install.sh,"
 echo "    then re-run register_host on the controller for a fresh token."

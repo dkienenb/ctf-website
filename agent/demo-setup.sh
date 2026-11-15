@@ -1,8 +1,8 @@
 #!/bin/sh
 # Demo base images for a workhorse (run with sudo on the workhorse itself).
-# Installs the two demo templates + a private NAT network so a lab
-# allocation can boot for real. Demo-only: real Kali/target templates
-# replace these before launch (handoff §13).
+# Installs the two demo templates (domains attach to per-lab networks via
+# the @LAB_NET@ placeholder; the agent defines those networks on demand).
+# Demo-only: real Kali/target templates replace these before launch (§13).
 set -e
 
 if [ "$(id -u)" -ne 0 ]; then

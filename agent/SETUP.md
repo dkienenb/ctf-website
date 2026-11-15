@@ -8,14 +8,16 @@ sudo ./install.sh
 
 What it does:
 
-1. Installs KVM/libvirt (`qemu-kvm`, `libvirt-daemon-system`, `libvirt-clients`)
-   and enables `libvirtd`.
+1. Installs KVM/libvirt (`qemu-kvm`, `libvirt-daemon-system`,
+   `libvirt-clients`) and `docker.io` (for the per-workhorse guacd), and
+   enables `libvirtd`.
 2. Creates the restricted `ctf-agent` service user (no login shell) and grants
    only libvirt access via the `kvm` and `libvirt` groups.
 3. Creates `/var/lib/libvirt/images/ctf/{images,disks}` for versioned base images and
    per-instance writable disks.
 4. Copies this `agent/` directory to `/opt/ctf/agent` and installs the
-   `ctf-agent.service` systemd unit.
+   `ctf-agent.service` systemd unit. (Re-running install.sh after a
+   `git pull` is how the deployed agent gets updated.)
 5. Enables and starts the agent. It polls the portal controller.
 
 Before starting, create the agent config from `agent.toml.example`:
@@ -37,12 +39,28 @@ Token is shown once; put it in `/etc/ctf/agent.toml`.
 
 Each template directory needs two files:
 
-- `images/attacker/domain.xml` — libvirt domain XML with `@NAME@` and `@DISK@` placeholders
+- `images/attacker/domain.xml` — libvirt domain XML with `@NAME@`, `@DISK@`,
+  `@VNC_PORT@`, and `@LAB_NET@` placeholders (`@LAB_NET@` is the per-lab
+  isolated network the agent defines on demand, §17)
 - `images/attacker/disk-template` — qcow2 base image (Kali attacker)
 - `images/target/…` — same pair for the vulnerable target
 
 Missing templates fail the allocation explicitly (handoff §13: no silent
-version replacement).
+version replacement). Re-running `sudo ./demo-setup.sh` refreshes the
+deployed demo templates from the repo copy.
+
+## Host firewall (§17) and desktops
+
+```sh
+sudo ./isolation-install.sh   # one-time per workhorse; idempotent; persists
+sudo ./guacd-install.sh       # per-workhorse guacd on host network (required
+                              # for the browser desktop stream)
+```
+
+Per-lab libvirt networks (`ctf-lab<N>-net`, subnet `10.<lab>.0.0/24`) are
+created by the agent during allocation; the firewall blocks lab→host,
+lab→other labs, and lab→home/mgmt LAN. Audit with `sudo ./verify-isolation.sh`
+(it ends with the guest-side reachability probes required by §17).
 
 ## Lease enforcement
 

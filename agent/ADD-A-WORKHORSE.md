@@ -18,8 +18,8 @@ CAPACITY=1                                           # concurrent lab slots this
 
 ```sh
 sudo apt-get update && sudo apt-get install -y git
-git clone "$UPSTREAM_URL" /opt/ctf/website
-cd /opt/ctf/website
+git clone "$UPSTREAM_URL" ~/ctf-website
+cd ~/ctf-website
 ```
 
 ## 2. Pre-flight checks (all three must pass)
@@ -37,7 +37,7 @@ saved-memory headroom; the controller enforces it from agent heartbeats.
 ## 3. Install KVM/libvirt and the agent service (idempotent)
 
 ```sh
-cd /opt/ctf/website/agent
+cd ~/ctf-website/agent
 sudo ./install.sh
 ```
 
@@ -60,7 +60,7 @@ retrieved again. Re-running `register_host` rotates it.
 
 ```sh
 sudo mkdir -p /etc/ctf
-sudo cp /opt/ctf/website/agent/agent.toml.example /etc/ctf/agent.toml
+sudo cp ~/ctf-website/agent/agent.toml.example /etc/ctf/agent.toml
 sudoedit /etc/ctf/agent.toml
 #   controller_url = "$CONTROLLER_URL"
 #   host_name      = "$HOST_NAME"        # must exactly match the registered name
@@ -96,7 +96,7 @@ A fresh heartbeat with resources and `admits=True` means the host is live.
 ## 8. Host firewall (§17 isolation) — run once per workhorse
 
 ```sh
-cd /opt/ctf/website/agent
+cd ~/ctf-website/agent
 sudo ./isolation-install.sh   # idempotent; persists via iptables-persistent
 sudo ./guacd-install.sh       # per-workhorse guacd on host network (desktops)
 sudo ./demo-setup.sh          # demo templates (owner-supplied templates later)
@@ -136,7 +136,7 @@ the portal move reserved → starting → running.
 
 ## Maintenance
 
-- Update the agent: `cd /opt/ctf/website && git pull && sudo cp -r agent /opt/ctf/ && sudo systemctl restart ctf-agent`
+- Update the agent: `cd ~/ctf-website && git pull && sudo cp -r agent /opt/ctf/ && sudo systemctl restart ctf-agent`
 - Rotate the token: re-run `register_host` on the controller, update `/etc/ctf/agent.toml`, restart the agent.
 - Drain the host for maintenance: set it offline on the controller (labs save,
   new allocations stop), wait for `saving` labs to complete, then reboot.

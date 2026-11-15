@@ -65,5 +65,5 @@ else
 fi
 
 echo "==> §17 host firewall in place. Reachability tests (§17: test"
-echo "    explicitly) are audited by agent/verify-isolation.sh, and"
-echo "    guest-side probes are documented in agent/SETUP.md."
+echo "    explicitly) are audited by agent/verify-isolation.sh, which"
+echo "    also lists the guest-side probes to run from a lab console."

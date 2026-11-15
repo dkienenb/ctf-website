@@ -1,7 +1,7 @@
 #!/bin/sh
-# Deploy the per-workhorse guacd (remote-desktop backend) bound to the
-# workhorse's management interface, plus a firewall rule keeping lab guests
-# away from it (handoff §16: guacd must not be reachable from player networks).
+# Deploy the per-workhorse guacd (remote-desktop backend) on the host
+# network, keeping lab guests away from it via the §17 INPUT drop
+# (handoff §16: guacd must not be reachable from player networks).
 set -e
 
 if [ "$(id -u)" -ne 0 ]; then

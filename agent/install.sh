@@ -7,9 +7,9 @@ if [ "$(id -u)" -ne 0 ]; then
   exit 1
 fi
 
-echo "==> Installing KVM/libvirt"
+echo "==> Installing KVM/libvirt (and docker for the per-workhorse guacd)"
 apt-get update
-apt-get install -y qemu-kvm libvirt-daemon-system libvirt-clients
+apt-get install -y qemu-kvm libvirt-daemon-system libvirt-clients docker.io
 systemctl enable --now libvirtd
 
 echo "==> Creating restricted service user"
