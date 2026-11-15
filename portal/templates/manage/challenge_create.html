@@ -3,11 +3,13 @@
 {% block content %}
 <p><a href="{% url 'manage' %}">← Back to administration</a></p>
 <h1>New challenge</h1>
-<p class="muted small">Challenges start as drafts: invisible to players until you publish them. After creation you can add questions, alternate accepted answers, hints, files, a machine template, and pool memberships on the edit page.</p>
+<p class="muted small">Challenges start as drafts: invisible to players until you publish them. Add as many questions as you need here; hints, files, a machine template, and extra pool memberships are added on the edit page.</p>
 
-<section class="panel">
-  <form method="post" class="stack-form">
-    {% csrf_token %}
+<form method="post" class="stack-form">
+  {% csrf_token %}
+  {{ form.management_form }}
+  <section class="panel">
+    <h2>Challenge</h2>
     {% for field in form %}
       <div class="field">
         <label for="{{ field.id_for_label }}">{{ field.label }}</label>
@@ -16,7 +18,49 @@
         {% for error in field.errors %}<span class="error">{{ error }}</span>{% endfor %}
       </div>
     {% endfor %}
-    <button class="btn primary" type="submit">Create draft</button>
-  </form>
-</section>
+  </section>
+
+  <section class="panel">
+    <h2>Questions</h2>
+    {{ formset.management_form }}
+    {% for row in formset %}
+      <div class="question-row field-group">
+        <p class="muted small">Question {{ forloop.counter }}</p>
+        {% for field in row %}
+          <div class="field">
+            <label for="{{ field.id_for_label }}">{{ field.label }}</label>
+            {{ field }}
+            {% if field.help_text %}<span class="muted small">{{ field.help_text }}</span>{% endif %}
+            {% for error in field.errors %}<span class="error">{{ error }}</span>{% endfor %}
+          </div>
+        {% endfor %}
+      </div>
+    {% endfor %}
+    <template id="question-template">{{ formset.empty_form }}</template>
+    <button class="btn secondary" type="button" id="add-question">+ Add another question</button>
+    {% for error in formset.non_form_errors %}<span class="error">{{ error }}</span>{% endfor %}
+  </section>
+
+  <button class="btn primary" type="submit">Create draft</button>
+</form>
+
+<script>
+  // Clone the empty_form template as a new numbered question row.
+  document.getElementById("add-question").addEventListener("click", function () {
+    const template = document.getElementById("question-template");
+    const rows = document.querySelectorAll(".question-row");
+    const next = rows.length;  // zero-based next index
+    const node = template.content.firstElementChild.cloneNode(true);
+    node.innerHTML = node.innerHTML.replaceAll("__prefix__", String(next));
+    const label = document.createElement("p");
+    label.className = "muted small";
+    label.textContent = "Question " + (next + 1);
+    node.prepend(label);
+    node.classList.add("question-row");
+    node.classList.remove("field-group");
+    rows[rows.length - 1].after(node);
+    const total = document.querySelector('input[name="questions-TOTAL_FORMS"]');
+    total.value = String(next + 1);
+  });
+</script>
 {% endblock %}

@@ -208,7 +208,33 @@ def delete_hint(actor, hint_id):
     DataRevision.bump()
 
 
-def create_challenge(actor, *, title, description="", pool_id=None, prompt="", answer="", points=100):
+def _clean_questions(questions):
+    """Validate a create-challenge question list before anything is created."""
+    if not isinstance(questions, list) or not questions:
+        raise ServiceError("At least one question is required.")
+    cleaned = []
+    for index, question in enumerate(questions, start=1):
+        prompt = question.get("prompt") if isinstance(question, dict) else None
+        answers = question.get("answers")
+        points = question.get("points", 100)
+        if not isinstance(prompt, str) or not prompt.strip():
+            raise ServiceError(f"Question {index}: the prompt is required.")
+        if not isinstance(answers, list) or not answers:
+            raise ServiceError(f"Question {index}: at least one accepted answer is required.")
+        values = []
+        for answer in answers:
+            if not isinstance(answer, str) or not answer.strip():
+                raise ServiceError(f"Question {index}: accepted answers must be nonempty text.")
+            value = answer.strip()
+            if value not in values:
+                values.append(value)
+        if isinstance(points, bool) or not isinstance(points, int) or points < 0:
+            raise ServiceError(f"Question {index}: points must be a nonnegative integer.")
+        cleaned.append({"prompt": prompt.strip(), "answers": values, "points": points})
+    return cleaned
+
+
+def create_challenge(actor, *, title, description="", pool_id=None, questions):
     _assert_admin(actor)
     if not title.strip():
         raise ServiceError("Title is required.")
@@ -216,19 +242,29 @@ def create_challenge(actor, *, title, description="", pool_id=None, prompt="", a
         pool = Pool.objects.get(pk=pool_id) if pool_id else None
     except (Pool.DoesNotExist, ValueError, TypeError):
         raise ServiceError("Select a valid pool.")
-    if not prompt.strip() or not str(answer).strip():
-        raise ServiceError("First question prompt and accepted answer are required.")
-    if isinstance(points, bool) or not isinstance(points, int) or points < 0:
-        raise ServiceError("Points must be a nonnegative integer.")
+    cleaned = _clean_questions(questions)
     challenge = Challenge.objects.create(
         title=title.strip(), slug=_unique_slug(title), summary="Draft challenge",
         description=description, lifecycle=Challenge.Lifecycle.DRAFT,
     )
-    if pool:
-        PoolChallenge.objects.create(pool=pool, challenge=challenge)
-    question = Question.objects.create(challenge=challenge, prompt=prompt.strip(), points=points)
-    AcceptedAnswer.objects.create(question=question, value=str(answer).strip())
-    _audit(actor, "challenge-create", "", {"challenge": challenge.id})
+    try:
+        if pool:
+            PoolChallenge.objects.create(pool=pool, challenge=challenge)
+        for order, question in enumerate(cleaned):
+            row = Question.objects.create(
+                challenge=challenge, prompt=question["prompt"], points=question["points"],
+                display_order=order,
+            )
+            for value in question["answers"]:
+                AcceptedAnswer.objects.create(question=row, value=value)
+    except Exception:
+        # Validation happened up front; this is a last-resort rollback so a
+        # failed creation leaves no half-built challenge behind.
+        Question.objects.filter(challenge=challenge).delete()
+        PoolChallenge.objects.filter(challenge=challenge).delete()
+        challenge.delete()
+        raise
+    _audit(actor, "challenge-create", "", {"challenge": challenge.id, "questions": len(cleaned)})
     DataRevision.bump()
     return challenge
 

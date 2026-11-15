@@ -39,7 +39,8 @@ class OperatorServiceTests(TestCase):
         self.assertContains(response, "Machine images")
 
     def test_challenge_create_page_and_flow(self):
-        """Creation lives on its own labeled page; the dashboard links it."""
+        """Creation lives on its own labeled page; the dashboard links it;
+        the question formset supports several questions and alternate answers."""
         self.client.force_login(self.admin)
         response = self.client.get(reverse("manage"))
         self.assertEqual(response.status_code, 200)
@@ -48,20 +49,65 @@ class OperatorServiceTests(TestCase):
         response = self.client.get(reverse("manage-create-challenge"))
         self.assertEqual(response.status_code, 200)
         self.assertContains(response, "<label")
-        self.assertContains(response, "First question — prompt")
-        self.assertContains(response, "accepted answer")
+        self.assertContains(response, "Accepted answers")
         self.assertContains(response, "invisible to players until you publish")
+        # The dynamic-question affordances are present: empty_form template,
+        # add button, and management form.
+        self.assertContains(response, "question-template")
+        self.assertContains(response, "add-question")
+        self.assertContains(response, 'name="questions-TOTAL_FORMS"')
 
         pool = Pool.objects.create(name="Labeled pool", slug="labeled-pool")
         response = self.client.post(reverse("manage-create-challenge"), {
             "title": "Labeled challenge", "pool": pool.id,
-            "prompt": "p?", "answer": "a", "points": "50",
+            # Two questions; the third row is blank and must be skipped.
+            "questions-TOTAL_FORMS": "3", "questions-INITIAL_FORMS": "0",
+            "questions-MIN_NUM_FORMS": "0", "questions-MAX_NUM_FORMS": "1000",
+            "questions-0-prompt": "one plus one?",
+            "questions-0-answers": "2\n  two ",   # whitespace lines are dropped
+            "questions-0-points": "50",
+            "questions-1-prompt": "capital of France?",
+            "questions-1-answers": "paris\nParis",
+            "questions-1-points": "10",
+            "questions-2-prompt": "",
+            "questions-2-answers": "",
         })
         self.assertEqual(response.status_code, 302)
         challenge = Challenge.objects.get(title="Labeled challenge")
         self.assertEqual(challenge.lifecycle, Challenge.Lifecycle.DRAFT)
-        self.assertEqual(challenge.questions.count(), 1)
-        self.assertEqual(challenge.questions.first().points, 50)
+        questions = list(challenge.questions.order_by("display_order"))
+        self.assertEqual(len(questions), 2)
+        self.assertEqual([q.points for q in questions], [50, 10])
+        self.assertEqual(list(questions[0].accepted_answers.values_list("value", flat=True)), ["2", "two"])
+        self.assertEqual(list(questions[1].accepted_answers.values_list("value", flat=True)), ["paris", "Paris"])
+
+    def test_challenge_create_page_all_blank_questions_is_refused(self):
+        self.client.force_login(self.admin)
+        pool = Pool.objects.create(name="P", slug="p-x")
+        response = self.client.post(reverse("manage-create-challenge"), {
+            "title": "Empty", "pool": pool.id,
+            "questions-TOTAL_FORMS": "1", "questions-INITIAL_FORMS": "0",
+            "questions-MIN_NUM_FORMS": "0", "questions-MAX_NUM_FORMS": "1000",
+            "questions-0-prompt": "", "questions-0-answers": "",
+        })
+        self.assertEqual(response.status_code, 200)  # re-rendered with the error
+        self.assertFalse(Challenge.objects.exists())
+        self.assertContains(response, "question")
+
+    def test_challenge_create_partial_row_is_an_error(self):
+        """A row with content but a missing field is an error, not a silent skip."""
+        self.client.force_login(self.admin)
+        pool = Pool.objects.create(name="P2", slug="p-2")
+        response = self.client.post(reverse("manage-create-challenge"), {
+            "title": "Partial", "pool": pool.id,
+            "questions-TOTAL_FORMS": "2", "questions-INITIAL_FORMS": "0",
+            "questions-MIN_NUM_FORMS": "0", "questions-MAX_NUM_FORMS": "1000",
+            "questions-0-prompt": "q?", "questions-0-answers": "a", "questions-0-points": "10",
+            "questions-1-prompt": "", "questions-1-answers": "orphan answer",
+        })
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Prompt is required.")
+        self.assertFalse(Challenge.objects.exists())
 
     def setUp(self):
         self.admin = make_user("400000000000000001", "Admin", is_admin=True)
@@ -214,7 +260,8 @@ class OperatorServiceTests(TestCase):
 
     def test_content_lifecycle_and_draft_deletion(self):
         challenge = adminops.create_challenge(
-            self.admin, title="Doomed", pool_id=self._pool().id, prompt="Q?", answer="a", points=10
+            self.admin, title="Doomed", pool_id=self._pool().id,
+            questions=[{"prompt": "Q?", "answers": ["a"], "points": 10}],
         )
         self.assertEqual(challenge.lifecycle, Challenge.Lifecycle.DRAFT)
         adminops.delete_draft(self.admin, challenge.id)

@@ -24,17 +24,51 @@ class ChallengeCreationTests(TestCase):
         self.admin = make_user("300000000000000001", "Admin", is_admin=True)
         self.pool = Pool.objects.create(name="Pools Are Real", slug="real")
 
-    def _create(self, **overrides):
-        kwargs = {"title": "T", "pool_id": self.pool.id, "prompt": "p", "answer": "a", "points": 10}
+    def _create(self, questions=None, **overrides):
+        kwargs = {
+            "title": "T", "pool_id": self.pool.id,
+            "questions": questions if questions is not None else [
+                {"prompt": "p", "answers": ["a"], "points": 10},
+            ],
+        }
         kwargs.update(overrides)
         return adminops.create_challenge(self.admin, **kwargs)
 
     def test_create_builds_first_question_and_answers(self):
-        challenge = self._create(answer=" flag-one ", points=42)
+        challenge = self._create(questions=[{"prompt": "p", "answers": [" flag-one "], "points": 42}])
         self.assertEqual(challenge.lifecycle, Challenge.Lifecycle.DRAFT)
         question = challenge.questions.get()
         self.assertEqual(question.points, 42)
         self.assertEqual(list(question.accepted_answers.values_list("value", flat=True)), ["flag-one"])
+
+    def test_create_with_multiple_questions_and_alternate_answers(self):
+        challenge = self._create(title="Multi", questions=[
+            {"prompt": "q1", "answers": ["a1", "a2"], "points": 10},
+            {"prompt": "q2", "answers": ["b1"], "points": 90},
+            {"prompt": "q3", "answers": ["c1", "c2", "c3"], "points": 0},
+        ])
+        self.assertEqual(challenge.questions.count(), 3)
+        orders = list(challenge.questions.order_by("display_order").values_list("display_order", "points"))
+        self.assertEqual(orders, [(0, 10), (1, 90), (2, 0)])
+        second = challenge.questions.order_by("display_order")[1]
+        self.assertEqual(second.accepted_answers.count(), 1)
+        third = challenge.questions.order_by("display_order")[2]
+        self.assertEqual(third.accepted_answers.count(), 3)
+
+    def test_multiple_question_validation_negatives_create_nothing(self):
+        bad_lists = [
+            [],                                                        # none at all
+            [{"prompt": "ok", "answers": ["a"], "points": 1},
+             {"prompt": "  ", "answers": ["a"], "points": 1}],          # blank prompt in #2
+            [{"prompt": "ok", "answers": [], "points": 1}],             # no answers
+            [{"prompt": "ok", "answers": ["a", "  "], "points": 1}],    # blank answer
+            [{"prompt": "ok", "answers": ["a"], "points": -3}],         # negative points
+            [{"prompt": "ok", "answers": ["a"], "points": True}],       # bool points
+        ]
+        for questions in bad_lists:
+            with self.assertRaises(ServiceError, msg=questions):
+                self._create(title="Multi", questions=questions)
+        self.assertFalse(Challenge.objects.exists())  # all-or-nothing: no partial challenges
 
     def test_slashes_and_slugs_are_unique_across_same_titled_challenges(self):
         one, two = self._create(title="Same Name"), self._create(title="Same Name")
@@ -44,11 +78,11 @@ class ChallengeCreationTests(TestCase):
         for kwargs in (
             {"title": "   "},
             {"pool_id": "not-a-pool"},
-            {"prompt": "  "},
-            {"answer": "  "},
-            {"points": -1},
-            {"points": True},
-            {"points": "ten"},
+            {"questions": [{"prompt": "  ", "answers": ["a"], "points": 1}]},
+            {"questions": [{"prompt": "p", "answers": ["  "], "points": 1}]},
+            {"questions": [{"prompt": "p", "answers": ["a"], "points": -1}]},
+            {"questions": [{"prompt": "p", "answers": ["a"], "points": True}]},
+            {"questions": [{"prompt": "p", "answers": ["a"], "points": "ten"}]},
         ):
             with self.assertRaises(ServiceError, msg=kwargs):
                 self._create(**kwargs)

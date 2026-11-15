@@ -4,6 +4,7 @@ and data inspection; these pages implement the operator workflows.
 """
 from django import forms
 from django.contrib import messages
+from django.forms import formset_factory
 from django.shortcuts import get_object_or_404, redirect, render
 from django.utils import timezone
 
@@ -68,21 +69,50 @@ class CreateChallengeForm(forms.Form):
         queryset=Pool.objects.all(),
         help_text="Which pool the challenge appears in. Multiple pools can be assigned after creation.",
     )
+
+
+class QuestionForm(forms.Form):
+    """One question of a new challenge; answers are one per line (alternates
+    match exactly, like the edit page's accepted-answer editor). An entirely
+    blank row is skipped; a partially filled row is an error."""
+
     prompt = forms.CharField(
-        max_length=1000,
-        label="First question — prompt",
-        help_text="The first question players must answer. More questions can be added on the edit page.",
+        max_length=1000, required=False,
+        label="Prompt",
+        help_text="What players must answer.",
     )
-    answer = forms.CharField(
-        max_length=4096,
-        label="First question — accepted answer",
-        widget=forms.Textarea(attrs={"rows": 2}),
-        help_text="Matching is exact against this value. Add alternate accepted answers after creation.",
+    answers = forms.CharField(
+        label="Accepted answers (one per line)",
+        widget=forms.Textarea(attrs={"rows": 2}), required=False,
+        help_text="Each line is an accepted answer; matching is exact.",
     )
     points = forms.IntegerField(
-        min_value=0, initial=100,
-        help_text="Points this question is worth.",
+        min_value=0, required=False,
+        label="Points",
+        help_text="What this question is worth.",
     )
+
+    def clean(self):
+        data = super().clean()
+        prompt = (data.get("prompt") or "").strip()
+        answers = [line.strip() for line in (data.get("answers") or "").splitlines() if line.strip()]
+        points = data.get("points")
+        if not prompt and not answers and points is None:
+            self.skipped = True  # entirely blank extra row
+            return data
+        if not prompt:
+            self.add_error("prompt", "Prompt is required.")
+        if not answers:
+            self.add_error("answers", "At least one accepted answer is required.")
+        if points is None:
+            self.add_error("points", "Points are required.")
+        return data
+
+    def cleaned_answers(self):
+        return [line.strip() for line in (self.cleaned_data.get("answers") or "").splitlines() if line.strip()]
+
+
+QuestionFormSet = formset_factory(QuestionForm, extra=0)
 
 
 @admin_page
@@ -343,16 +373,24 @@ def upload_attachment(request, challenge_id):
 def create_challenge(request):
     if request.method == "POST":
         form = CreateChallengeForm(request.POST)
-        if form.is_valid():
+        formset = QuestionFormSet(request.POST, prefix="questions")
+        if form.is_valid() and formset.is_valid():
+            questions = [
+                {
+                    "prompt": row.cleaned_data["prompt"],
+                    "answers": row.cleaned_answers(),
+                    "points": row.cleaned_data["points"],
+                }
+                for row in formset.forms
+                if row.has_changed() and not getattr(row, "skipped", False)
+            ]
             try:
                 challenge = adminops.create_challenge(
                     request.user,
                     title=form.cleaned_data["title"],
                     description=form.cleaned_data["description"],
                     pool_id=form.cleaned_data["pool"].id,
-                    prompt=form.cleaned_data["prompt"],
-                    answer=form.cleaned_data["answer"],
-                    points=form.cleaned_data["points"],
+                    questions=questions,
                 )
                 messages.success(request, "Draft created. It is not visible to players.")
                 return redirect("manage-content-edit", challenge_id=challenge.id)
@@ -362,7 +400,10 @@ def create_challenge(request):
             messages.error(request, "Check the form fields.")
     else:
         form = CreateChallengeForm()
-    return render(request, "manage/challenge_create.html", {"form": form})
+        formset = QuestionFormSet(prefix="questions", initial=[{}])
+    return render(request, "manage/challenge_create.html", {
+        "form": form, "formset": formset,
+    })
 
 
 @admin_page
