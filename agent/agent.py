@@ -517,8 +517,14 @@ class ControllerClient:
 
 
 def collect_resources(config, running_labs=0):
-    images = Path(config["images_dir"])
-    usage = shutil.disk_usage(images if images.exists() else Path("/var/lib/libvirt/images/ctf"))
+    # LibvirtExecutor's __init__ creates the disks directory (the images dir
+    # is provisioned separately); both live on the same filesystem, so the
+    # disk stat always has a real path even on a freshly provisioned host.
+    executor = LibvirtExecutor(
+        images_dir=config["images_dir"], disks_dir=config["disks_dir"],
+    )
+    target = executor.images_dir if executor.images_dir.exists() else executor.disks_dir
+    usage = shutil.disk_usage(target)
     meminfo = {}
     for line in Path("/proc/meminfo").read_text().splitlines():
         key, _, rest = line.partition(":")
@@ -531,7 +537,7 @@ def collect_resources(config, running_labs=0):
         "total_ram_gb": round(meminfo.get("MemTotal", 0) / 1e6, 2),
         "running_labs": running_labs,
         "management_ip": config.get("management_ip", ""),
-        "inventory": LibvirtExecutor(images_dir=config["images_dir"]).template_inventory(),
+        "inventory": executor.template_inventory(),
     }
 
 
@@ -546,7 +552,7 @@ def run_once(client, executor, config, deadlines):
     try:
         commands = client.poll().get("commands", [])
     except (urllib.error.URLError, OSError, json.JSONDecodeError):
-        return handled
+        commands = []  # controller link lost; local deadlines still enforced (§18)
     for command in commands:
         deadline = command.get("acknowledged_deadline")
         if deadline:

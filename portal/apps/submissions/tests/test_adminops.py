@@ -20,6 +20,28 @@ from portal.apps.testutils import make_question, make_user
 
 @override_settings(SUBMISSION_COOLDOWN_SECONDS=0)
 class OperatorServiceTests(TestCase):
+    def test_preapprove_page_flow_upgrades_pending_accounts(self):
+        """The dashboard's 'Pre-approve ID' form: ledger first, no account
+        required; a pending account with that ID is upgraded immediately."""
+        pending = make_user("480000000000000001", "Early", status=User.Status.PENDING)
+        self.client.force_login(self.admin)
+        response = self.client.post(reverse("manage-preapprove"), {"discord_id": pending.discord_id})
+        self.assertEqual(response.status_code, 302)
+        pending.refresh_from_db()
+        self.assertEqual(pending.status, User.Status.APPROVED)
+        self.assertTrue(ApprovalDecision.objects.filter(
+            discord_id=pending.discord_id, decision="preapprove").exists())
+        # Pre-approving an ID with no account yet leaves only the ledger.
+        response = self.client.post(reverse("manage-preapprove"), {"discord_id": "481111111111111111"})
+        self.assertEqual(response.status_code, 302)
+        self.assertFalse(User.objects.filter(discord_id="481111111111111111").exists())
+
+    def test_preapprove_page_refuses_bad_ids(self):
+        self.client.force_login(self.admin)
+        response = self.client.post(reverse("manage-preapprove"), {"discord_id": "abc"})
+        self.assertEqual(response.status_code, 302)  # error toast, nothing created
+        self.assertFalse(ApprovalDecision.objects.filter(decision="preapprove").exists())
+
     def test_dashboard_renders_with_hint_redemptions(self):
         """Regression: the dashboard crashed with AttributeError on the first
         HintRedemption (recipient_id vs the model's user field)."""

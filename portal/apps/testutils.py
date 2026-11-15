@@ -57,6 +57,7 @@ def make_host(name="workhorse-01"):
     host.free_disk_gb = 80
     host.total_ram_gb = 32
     host.free_ram_gb = 26
+    host.management_ip = "10.0.2.15"  # as reported by a real agent heartbeat
     host.last_heartbeat = timezone.now()
     host.save()
     return host

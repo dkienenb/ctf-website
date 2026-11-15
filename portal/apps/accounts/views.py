@@ -3,7 +3,6 @@ import json
 import urllib.request
 
 from django.contrib import messages
-from django.contrib.auth import logout
 from django.shortcuts import redirect, render
 from django.views.decorators.http import require_http_methods
 
@@ -72,9 +71,3 @@ def timezone_now():
     from django.utils import timezone
 
     return timezone.now()
-
-
-@require_http_methods(["POST"])
-def sign_out(request):
-    logout(request)
-    return redirect("home")
