@@ -391,18 +391,19 @@ def admin_reset(actor, user_id, challenge_id, scope):
 def set_host_online(actor, host_id, online):
     from portal.apps.submissions.models import DataRevision
 
-    host = Host.objects.select_for_update().get(pk=host_id)
-    host.online = online
-    host.save(update_fields=("online",))
-    if not online:
-        for lab in LabInstance.objects.select_for_update().filter(state__in=("running", "reserved")):
-            lab.state = "unavailable"
-            lab.save(update_fields=("state", "updated_at"))
-            _notify(lab.user_id, "Workhorse unavailable. Browser access is interrupted; saved-state references are retained.")
-    else:
-        for lab in LabInstance.objects.select_for_update().filter(state="unavailable"):
-            _save_lab_locally(lab, "Workhorse returned. State retained; request a slot to resume. No template reset occurred.")
-        _promote()
+    with transaction.atomic():
+        host = Host.objects.select_for_update().get(pk=host_id)
+        host.online = online
+        host.save(update_fields=("online",))
+        if not online:
+            for lab in LabInstance.objects.select_for_update().filter(state__in=("running", "reserved")):
+                lab.state = "unavailable"
+                lab.save(update_fields=("state", "updated_at"))
+                _notify(lab.user_id, "Workhorse unavailable. Browser access is interrupted; saved-state references are retained.")
+        else:
+            for lab in LabInstance.objects.select_for_update().filter(state="unavailable"):
+                _save_lab_locally(lab, "Workhorse returned. State retained; request a slot to resume. No template reset occurred.")
+            _promote()
     DataRevision.bump()
     return host
 
