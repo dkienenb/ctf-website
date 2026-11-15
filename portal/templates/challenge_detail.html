@@ -65,6 +65,11 @@
         <p class="muted small">State: {{ lab.state }} · pinned templates: {{ challenge.lab_template.attacker_version }} / {{ challenge.lab_template.target_version }} · host: {% firstof lab.host.name 'unassigned' %}</p>
         {% if lab.state == 'reserved' %}
           <form method="post" action="{% url 'lab-action' challenge.slug 'claim' %}" class="filters">{% csrf_token %}<button class="btn primary" type="submit">Claim 30-minute lab</button></form>
+        {% elif lab.state == 'recovery' %}
+          <p class="muted small">A save failed on the workhorse. Your progress and scores are retained; the lab is held for an administrator to recover (the target returns to its pinned template). You'll be notified when it's ready.</p>
+          {% if user.is_admin %}
+            <form method="post" action="{% url 'lab-action' challenge.slug 'recover' %}" class="filters">{% csrf_token %}<button class="btn small danger" type="submit">Recover now (admin)</button></form>
+          {% endif %}
         {% elif lab.state == 'running' %}
           {% with lease=lab.leases.all|first %}
             <p>Lease ends {{ lease.expires_at|date:"H:i" }} (UTC).</p>

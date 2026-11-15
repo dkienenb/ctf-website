@@ -6,6 +6,7 @@ from datetime import timedelta
 from unittest import mock
 
 from django.test import TestCase, TransactionTestCase, override_settings
+from django.urls import reverse
 from django.utils import timezone
 
 from portal.apps.accounts.models import User
@@ -75,6 +76,7 @@ class LabLifecycleTests(TestCase):
         self.user = make_user("400000000000000001", "Alex")
         self.other = make_user("400000000000000002", "Sam")
         self.third = make_user("400000000000000003", "Jo")
+        self.admin = make_user("400000000000000009", "Ops", is_admin=True)
         self.challenge = make_lab_challenge()
         self.other_challenge = make_lab_challenge()
 
@@ -246,6 +248,55 @@ class LabLifecycleTests(TestCase):
         self.assertEqual(self._lab(self.other).state, "reserved")
 
     # --- expiry ------------------------------------------------------------
+
+    def test_recovery_state_shown_with_admin_recover_button(self):
+        """Regression: a recovery lab rendered the generic 'Request lab'
+        button, which then refused with 'you already hold a lab allocation' —
+        the owner's 'reserved but cannot access' loop. Recovery now has its
+        own message and a one-click admin recover (for owner-admins; other
+        users' labs are recoverable from the admin dashboard)."""
+        self._request_and_claim(self.admin, self.challenge)
+        complete(self.host, "allocate")
+        lab = self._lab(self.admin)
+        lab.state = "recovery"
+        lab.save(update_fields=("state",))
+        # The owner-admin sees the recovery message and the button.
+        self.client.force_login(self.admin)
+        response = self.client.get(reverse("challenge_detail", args=[self.challenge.slug]))
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "A save failed on the workhorse")
+        self.assertNotContains(response, ">Request lab<")
+        self.assertContains(response, "Recover now")
+        # A plain player owning the lab sees the message but no button
+        # (covered further by test_recover_action_requires_admin).
+
+    def test_admin_recover_action_issues_the_command(self):
+        self._request_and_claim(self.admin, self.challenge)
+        complete(self.host, "allocate")
+        lab = self._lab(self.admin)
+        lab.state = "recovery"
+        lab.save(update_fields=("state",))
+        self.client.force_login(self.admin)
+        response = self.client.post(reverse("lab-action", args=[self.challenge.slug, "recover"]))
+        self.assertEqual(response.status_code, 302)
+        command = HostCommand.objects.filter(operation="recover", lab=lab).order_by("-id").first()
+        self.assertIsNotNone(command)
+        self.assertEqual(command.status, HostCommand.Status.PENDING)
+        # Completing the command lands the lab back in 'saved'.
+        complete(self.host, "recover")
+        lab.refresh_from_db()
+        self.assertEqual(lab.state, "saved")
+
+    def test_recover_action_requires_admin(self):
+        self._request_and_claim(self.user)
+        complete(self.host, "allocate")
+        lab = self._lab(self.user)
+        lab.state = "recovery"
+        lab.save(update_fields=("state",))
+        self.client.force_login(self.user)
+        response = self.client.post(reverse("lab-action", args=[self.challenge.slug, "recover"]))
+        self.assertEqual(response.status_code, 302)
+        self.assertFalse(HostCommand.objects.filter(operation="recover", lab=lab).exists())
 
     def test_lease_expiry_saves_and_notifies(self):
         self._request_and_claim(self.user)

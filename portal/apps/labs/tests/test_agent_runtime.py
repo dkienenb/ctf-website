@@ -65,6 +65,7 @@ class AgentRuntimeTests(TestCase):
             poll_response={"commands": [self._command("save", lab=2)]},
             heartbeat_response={"lease_deadlines": {"2": "3000-01-01T00:00:00"}},
         )
+        self.executor.existing = {"ctf-lab2-atk", "ctf-lab2-tgt"}  # guests live on this host
         handled = workhorse_agent.run_once(client, self.executor, self.config, deadlines={})
         self.assertEqual(handled, 1)
         # Heartbeat carried resources; the deadline from the response was stored.
@@ -91,6 +92,7 @@ class AgentRuntimeTests(TestCase):
         client, calls = _recording_client(failing=True)
         expired = "2020-01-01T00:00:00"
         deadlines = {"5": expired}
+        self.executor.existing = {"ctf-lab5-atk", "ctf-lab5-tgt"}
         with mock.patch.object(workhorse_agent.sys, "stderr"):
             handled = workhorse_agent.run_once(client, self.executor, self.config, deadlines)
         # The heartbeat attempt was made but its response failed (outage)…
@@ -111,6 +113,7 @@ class AgentRuntimeTests(TestCase):
             "2": "2020-01-01T00:00:00",   # expired: saved
             "3": "not-a-date",            # malformed: skipped, never crashes
         }
+        self.executor.existing = {"ctf-lab2-atk", "ctf-lab2-tgt"}
         workhorse_agent.enforce_deadlines(client, self.executor, deadlines)
         self.assertIn("1", deadlines)      # future deadline retained
         self.assertNotIn("2", deadlines)   # expired deadline consumed
@@ -132,6 +135,7 @@ class AgentRuntimeTests(TestCase):
 
     def test_deadline_expired_is_a_coordinated_save(self):
         executor = self.executor
+        executor.existing = {"ctf-lab4-atk", "ctf-lab4-tgt"}
         detail = executor.deadline_expired({"lab": 4, "op_id": "local-4"})
         self.assertIn("saved_dir", detail)
         saves = [call for call in executor.calls if call[0] == "save"]

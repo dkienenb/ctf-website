@@ -436,15 +436,29 @@ class LibvirtExecutor:
         )
 
     def save(self, command):
-        """Coordinated save-to-disk: attacker, then target (§12)."""
+        """Coordinated save-to-disk: attacker, then target (§12).
+
+        Idempotent under the dual-expiry race: the controller's durable save
+        and the agent's own host-local deadline enforcement (§18) can both
+        fire at lease expiry. Whichever runs second finds the domains already
+        saved and undefined; that is a successful no-op, not a failure that
+        would push the lab into recovery."""
         attacker, target, saved_dir = self._names(command)
         saved_dir.mkdir(parents=True, exist_ok=True)
-        self.virsh("save", attacker, str(saved_dir / "attacker.save"))
-        self.virsh("save", target, str(saved_dir / "target.save"))
+        already_saved = []
+        for domain, filename in ((attacker, "attacker.save"), (target, "target.save")):
+            if self.domain_exists(domain):
+                self.virsh("save", domain, str(saved_dir / filename))
+            elif (saved_dir / filename).exists():
+                already_saved.append(domain)  # a concurrent save captured it already
+            else:
+                raise AgentError(
+                    f"virsh save {domain} failed: domain missing and no prior save exists"
+                )
         for domain in (attacker, target):
             if self.domain_exists(domain):
                 self.virsh("undefine", domain)
-        return {"saved_dir": str(saved_dir)}
+        return {"saved_dir": str(saved_dir), "already_saved": already_saved}
 
     def reset(self, command):
         """Destroy the pair and its writable disks; templates are recreated on

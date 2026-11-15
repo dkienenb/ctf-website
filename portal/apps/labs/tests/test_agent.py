@@ -185,6 +185,7 @@ class AgentExecutorTests(TestCase):
 
         with tempfile.TemporaryDirectory() as tmp:
             executor = self._executor(tmp)
+            executor.existing = {"ctf-abc123def456-atk", "ctf-abc123def456-tgt"}
             command = {"op_id": "abc123def456", "operation": "save", "payload": {}}
             detail = workhorse_agent.execute(executor, command)
             saves = [call for call in executor.calls if call[0] == "save"]
@@ -289,6 +290,30 @@ class AgentExecutorTests(TestCase):
             self.assertEqual(detail["removed"], "attacker/kali-v1")
             self.assertFalse(version_dir.exists())
 
+    def test_save_is_idempotent_under_the_dual_expiry_race(self):
+        """The controller's durable save and the agent's own host-local
+        deadline enforcement can both fire at lease expiry (§11 + §18).
+        Whichever runs second finds the domains already saved and undefined:
+        that is a successful no-op, never a recovery."""
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmp:
+            executor = self._executor(tmp)
+            command = {"op_id": "save-2", "operation": "save", "payload": {}, "lab": 1}
+            # Second runner: domains gone, but the first runner's artifacts exist.
+            saved_dir = executor.disks_dir / "saved-lab1"
+            saved_dir.mkdir(parents=True)
+            (saved_dir / "attacker.save").write_bytes(b"a")
+            (saved_dir / "target.save").write_bytes(b"t")
+            detail = workhorse_agent.execute(executor, command)
+            self.assertEqual(detail["already_saved"], ["ctf-lab1-atk", "ctf-lab1-tgt"])
+            self.assertFalse([call for call in executor.calls if call[0] == "save"])
+            # A missing domain with NO prior save is still a hard error.
+            (saved_dir / "attacker.save").unlink()
+            with self.assertRaises(workhorse_agent.AgentError) as error:
+                workhorse_agent.execute(executor, command)
+            self.assertIn("no prior save exists", str(error.exception))
+
     def test_same_lab_domain_identity_across_operations(self):
         """Allocate, save, and reset must address the SAME domain names (§12)."""
         import tempfile
@@ -302,6 +327,8 @@ class AgentExecutorTests(TestCase):
             lab_command = {"op_id": "op-allocate", "operation": "allocate", "payload": {"lab": 7}, "lab": 7}
             detail = workhorse_agent.execute(executor, lab_command)
             self.assertEqual(detail["domains"], ["ctf-lab7-atk", "ctf-lab7-tgt"])
+            # After a completed allocate the guests exist on the host.
+            executor.existing = {"ctf-lab7-atk", "ctf-lab7-tgt"}
             save_command = {"op_id": "op-save-different-id", "operation": "save", "payload": {}, "lab": 7}
             workhorse_agent.execute(executor, save_command)
             saves = [call[1] for call in executor.calls if call[0] == "save"]

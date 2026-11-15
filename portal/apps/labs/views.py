@@ -24,6 +24,14 @@ def lab_action(request, slug, action):
             result = services.release(request.user, challenge.id)
         elif action == "request-reset":
             result = services.request_admin_reset(request.user, challenge.id)
+        elif action == "recover":
+            if not request.user.is_admin:
+                raise services.ServiceError("Administrator access is required.", 403)
+            lab = request.user.labs.filter(challenge=challenge).first()
+            if lab is None:
+                raise services.ServiceError("No lab exists for this challenge yet.", 404)
+            services.admin_reset(request.user, request.user.id, challenge.id, "recover")
+            result = {"message": "Recovery command issued. The target returns to its pinned template; your progress is preserved."}
         else:
             raise services.ServiceError("Unknown lab action.")
         messages.success(request, result["message"])
