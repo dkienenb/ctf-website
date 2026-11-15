@@ -191,3 +191,13 @@ DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 # Guacamole signed-JSON auth (handoff §16): 128-bit hex secret shared with
 # the guacamole container's JSON_SECRET_KEY.
 GUACAMOLE_JSON_SECRET = env("GUACAMOLE_JSON_SECRET", "")
+# Path-A desktop routing (multiple workhorses): comma-separated
+# "host-slug=/web/path/" pairs, one per Guacamole instance. Each instance is
+# a compose service with its own GUACD_HOSTNAME (that workhorse's guacd) and
+# WEBAPP_CONTEXT matching the path. Empty/unset = single-instance deployment:
+# every host's desktops are served at /guacamole/ (the default).
+GUACAMOLE_INSTANCE_PATHS = {
+    pair.split("=", 1)[0].strip(): pair.split("=", 1)[1].strip()
+    for pair in env("GUACAMOLE_INSTANCE_PATHS", "").split(",")
+    if "=" in pair
+}

@@ -67,8 +67,7 @@ services:
       db:
         condition: service_healthy
     environment:
-      WEBAPP_CONTEXT: ROOT
-      # REQUIRED, no default: the guacd that terminates desktop sessions is
+      WEBAPP_CONTEXT: ROOT      # REQUIRED, no default: the guacd that terminates desktop sessions is
       # the per-workhorse guacd (agent/guacd-install.sh), co-located with the
       # lab VMs. Guacamole 1.6.0 has no per-connection guacd routing — grants
       # cannot redirect it — so this is deployment-wide (see .env.example).
@@ -83,6 +82,33 @@ services:
       LOG_LEVEL: info
     volumes:
       - ./guac/extensions:/root/.guacamole/extensions:ro
+
+# --- Path A: one Guacamole instance per workhorse -----------------------------
+# Guacamole 1.6.0 has no per-connection guacd routing, so each workhorse's
+# desktops are served by its own instance, pinned to that host's guacd via
+# GUACD_HOSTNAME. For each NEW workhorse: copy this block, set the service
+# name alias (guac-<slug>), GUACD_HOSTNAME to that host's management IP, and
+# WEBAPP_CONTEXT to its route path (a UNIQUE path — the Caddy route and the
+# portal's GUACAMOLE_INSTANCE_PATHS entry must match). See
+# agent/ADD-A-WORKHORSE.md §Desktop streaming.
+#
+#  guacamole-<slug>:
+#    image: guacamole/guacamole:1.6.0
+#    depends_on:
+#      db:
+#        condition: service_healthy
+#    environment:
+#      WEBAPP_CONTEXT: /guacamole/<slug>/
+#      GUACD_HOSTNAME: <that workhorse's management IP>
+#      POSTGRESQL_HOSTNAME: db
+#      POSTGRESQL_DATABASE: guacamole_db
+#      POSTGRESQL_USERNAME: guacamole
+#      POSTGRESQL_PASSWORD: ${GUACAMOLE_DB_PASSWORD:-guacpw}
+#      JSON_SECRET_KEY: ${GUACAMOLE_JSON_SECRET:-}
+#      LOG_LEVEL: info
+#    volumes:
+#      - ./guac/extensions:/root/.guacamole/extensions:ro
+
 
 volumes:
   pgdata:

@@ -2,14 +2,26 @@
 # The Cloudflare Tunnel reaches this gateway only — never the lab network.
 :80 {
 	# Guacamole: browser desktop sessions for RUNNING lab leases only.
-	# The guacamole container runs with a ROOT webapp context, so the
-	# /guacamole/ prefix is stripped here. guacd itself stays private.
+	# The default instance (single-workhorse deployments) runs with a ROOT
+	# webapp context, so the /guacamole/ prefix is stripped here.
 	handle_path /guacamole/* {
 		reverse_proxy guacamole:8080
 	}
 	handle /guacamole {
 		redir /guacamole/ /guacamole/ 308
 	}
+
+	# --- Path A: one route block per ADDITIONAL workhorse -------------------
+	# Each additional instance serves AT its own WEBAPP_CONTEXT (no strip —
+	# the app builds its absolute URLs from the context path). Copy, set the
+	# matcher and upstream to match the compose service, and add the matching
+	# GUACAMOLE_INSTANCE_PATHS entry (agent/ADD-A-WORKHORSE.md).
+	# handle /guacamole/<slug>/* {
+	# 	reverse_proxy guac-<slug>:8080
+	# }
+	# handle /guacamole/<slug> {
+	# 	redir /guacamole/<slug>/ /guacamole/<slug>/ 308
+	# }
 
 	# Portal: forwarded by the Worker/VPC path and usable directly on the LAN.
 	handle {

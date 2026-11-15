@@ -134,6 +134,27 @@ watch -n2 "sudo virsh --connect qemu:///system list --all | grep ctf-"
 You should see `ctf-<op>-atk` and `ctf-<op>-tgt` start, and the lab state on
 the portal move reserved → starting → running.
 
+## Desktop streaming for the new workhorse (Path A)
+
+Guacamole 1.6.0 has no per-connection guacd routing, so each workhorse's
+desktops are served by its own Guacamole instance, pinned to that host's
+guacd. The FIRST workhorse is served by the existing `guacamole` compose
+service at `/guacamole/` (single-instance mode, no additions needed). Every
+additional workhorse needs three matching additions:
+
+1. **compose.yaml** — copy the ready block at the bottom of the file into a
+   new service `guacamole-<slug>`: `GUACD_HOSTNAME` = this host's
+   `management_ip`, `WEBAPP_CONTEXT` = `/guacamole/<slug>/` (a unique path).
+2. **caddy/Caddyfile** — copy the ready block: `handle /guacamole/<slug>/*`
+   → `reverse_proxy guac-<slug>:8080` (NO `handle_path` strip — the app
+   serves at its own context path). Reload Caddy.
+3. **.env** — extend `GUACAMOLE_INSTANCE_PATHS` with
+   `<slug>=/guacamole/<slug>/` and `docker compose up -d` the portal.
+
+Until all three exist, desktop grants for that host are refused with an
+operator message (never misrouted to the wrong guacd). Allocation, saves,
+and template staging need none of this — they are host-agnostic.
+
 ## Maintenance
 
 - Update the agent: `cd ~/ctf-website && git pull && sudo cp -r agent /opt/ctf/ && sudo systemctl restart ctf-agent`

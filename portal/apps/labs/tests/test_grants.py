@@ -49,8 +49,68 @@ class ClientUrlIdentifierTests(TestCase):
         )
 
 
+class DesktopRoutingTests(TestCase):
+    """Path A: per-workhorse Guacamole instances. The grant URL carries the
+    routing path of the lab's OWN host's instance."""
+
+    def setUp(self):
+        from portal.apps.testutils import make_host
+        self.host = make_host()
+        self._secret = override_settings(GUACAMOLE_JSON_SECRET="ab" * 16)
+        self._secret.enable()
+        self.addCleanup(self._secret.disable)
+
+    def test_single_instance_default_serves_every_host_at_guacamole(self):
+        """Empty mapping (single-workhorse deployments): no config, no
+        surprises — every host's grants ride the classic /guacamole/ path."""
+        self.assertEqual(guacamole.instance_base_path("workhorse-02"), "/guacamole/")
+        self.assertEqual(guacamole.instance_base_path("anything-else"), "/guacamole/")
+
+    def test_multi_instance_routes_each_host_to_its_own_path(self):
+        with override_settings(GUACAMOLE_INSTANCE_PATHS={
+            "workhorse-02": "/guacamole/",
+            "workhorse-03": "/guacamole/workhorse-03/",
+        }):
+            self.assertEqual(guacamole.instance_base_path("workhorse-02"), "/guacamole/")
+            self.assertEqual(guacamole.instance_base_path("workhorse-03"), "/guacamole/workhorse-03/")
+
+    def test_multi_instance_refuses_unmapped_hosts_with_operator_guidance(self):
+        with override_settings(GUACAMOLE_INSTANCE_PATHS={"workhorse-02": "/guacamole/"}):
+            with self.assertRaises(guacamole.GrantError) as error:
+                guacamole.instance_base_path("workhorse-09")
+            self.assertIn("No Guacamole instance is configured", error.exception.message)
+            self.assertIn("GUACAMOLE_INSTANCE_PATHS", error.exception.message)
+
+    def test_host_names_slugify_to_url_safe_path_segments(self):
+        self.assertEqual(guacamole._host_slug("Workhorse 03!"), "workhorse-03")
+        self.assertEqual(guacamole._host_slug("wh_x.1"), "wh-x-1")
+
+    def test_grant_url_uses_the_host_routed_base(self):
+        import json as json_lib
+        from urllib.parse import unquote, urlparse
+        challenge = make_lab_challenge()
+        user = make_user("700000000000000009", "Routed")
+        from portal.apps.labs import services
+        services.request_lab(user, challenge.id)
+        services.claim(user, challenge.id)
+        lab = user.labs.get(challenge=challenge)
+
+        url = guacamole.issue_grant(user, lab)
+        self.assertTrue(url.startswith("/guacamole/#/client/"))  # single-instance default
+
+        with override_settings(GUACAMOLE_INSTANCE_PATHS={self.host.name: "/guacamole/"}):
+            url = guacamole.issue_grant(user, lab)
+            self.assertTrue(url.startswith("/guacamole/#/client/"))
+        # The grant payload is intact either way (signature + expiry present).
+        fragment = url.split("#/client/")[1]
+        data = unquote(fragment.split("data=")[1])
+        self.assertTrue(data)  # nonempty encrypted grant
+
+
 @override_settings(GUACAMOLE_JSON_SECRET="ab" * 16)
 class GrantShapeTests(TestCase):
+
+
     def setUp(self):
         from portal.apps.testutils import make_host
         self.host = make_host()

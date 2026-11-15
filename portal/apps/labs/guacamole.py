@@ -25,9 +25,40 @@ from django.conf import settings
 
 from .services import vnc_port_for
 
+import re
+from django.conf import settings
+
 GRANT_TTL_MS = 5 * 60 * 1000
-GUAC_ORIGIN = "/guacamole/"
+GUAC_ORIGIN = "/guacamole/"  # default single-instance path
 ZERO_IV = b"\x00" * 16
+
+
+def _host_slug(host_name):
+    """URL-safe path segment for a host name (the routing key)."""
+    slug = re.sub(r"[^a-z0-9-]+", "-", str(host_name).lower()).strip("-")
+    return slug or "host"
+
+
+def instance_base_path(host_name):
+    """The web path of the Guacamole instance serving THIS host's desktops
+    (Path A: one instance per workhorse, each pinned to that host's guacd).
+
+    Single-instance deployments (GUACAMOLE_INSTANCE_PATHS unset) serve every
+    host at /guacamole/. Multi-instance deployments map host → path; an
+    unmapped host is an operator configuration gap, refused with instructions
+    rather than routed to the wrong guacd."""
+    mapping = getattr(settings, "GUACAMOLE_INSTANCE_PATHS", {}) or {}
+    if not mapping:
+        return GUAC_ORIGIN
+    path = mapping.get(_host_slug(host_name))
+    if not path:
+        raise GrantError(
+            f"No Guacamole instance is configured for workhorse '{host_name}'. "
+            "Add a compose service (GUACD_HOSTNAME = that host's management IP, "
+            "WEBAPP_CONTEXT = its route path), a Caddy route, and a "
+            "GUACAMOLE_INSTANCE_PATHS entry — see agent/ADD-A-WORKHORSE.md."
+        )
+    return path if path.startswith("/") else f"/{path}"
 
 
 class GrantError(Exception):
@@ -102,4 +133,5 @@ def issue_grant(user, lab, *, vnc_port=None):
     # ever dials guacd.
     connection_id = f"lab-{lab.id}"
     fragment_id = _client_url_identifier(connection_id)
-    return f"{GUAC_ORIGIN}#/client/{fragment_id}?data={quote(data)}"
+    base = instance_base_path(lab.host.name)
+    return f"{base}#/client/{fragment_id}?data={quote(data)}"

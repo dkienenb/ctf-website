@@ -119,7 +119,8 @@ class PageFlowTests(TestCase):
             from portal.apps.labs import guacamole
 
             url = guacamole.issue_grant(user, __import__("types").SimpleNamespace(
-                id=1, host=__import__("types").SimpleNamespace(management_ip="10.0.0.5")))
+                id=1, name="workhorse-02",
+                host=__import__("types").SimpleNamespace(management_ip="10.0.0.5", name="workhorse-02")))
         from urllib.parse import unquote
 
         data = unquote(url.split("data=")[1].split("#")[0])
