@@ -9,7 +9,7 @@ fi
 
 echo "==> Installing KVM/libvirt (and docker for the per-workhorse guacd)"
 apt-get update
-apt-get install -y qemu-kvm libvirt-daemon-system libvirt-clients docker.io
+apt-get install -y qemu-kvm libvirt-daemon-system libvirt-clients docker.io sshpass
 systemctl enable --now libvirtd
 
 echo "==> Creating restricted service user"

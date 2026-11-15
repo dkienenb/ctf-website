@@ -6,10 +6,17 @@ durable command queue; the host matrix on the list page reads the inventory
 each agent reports with its heartbeat.
 """
 from django import forms
+from django.conf import settings
 from django.shortcuts import get_object_or_404, redirect, render
 from django.contrib import messages
 
 from portal.apps.accounts.decorators import admin_page
+
+
+def _host_slug(host_name):
+    """Mirror of the portal-side slug used for Guacamole instance routing."""
+    import re as _re
+    return _re.sub(r"[^a-z0-9-]+", "-", str(host_name).lower()).strip("-") or "host"
 from .models import Host, MachineImage
 from . import services as lab_services
 
@@ -19,6 +26,111 @@ class MachineImageForm(forms.Form):
     version = forms.CharField(max_length=80)
     notes = forms.CharField(max_length=500, required=False, widget=forms.Textarea(attrs={"rows": 2}))
     domain_xml = forms.CharField(widget=forms.Textarea(attrs={"rows": 10, "spellcheck": "false"}))
+
+
+class BuildStartForm(forms.Form):
+    host = forms.ModelChoiceField(queryset=Host.objects.filter(online=True), empty_label=None)
+    role = forms.ChoiceField(choices=MachineImage.Role.choices)
+    base_version = forms.CharField(max_length=80, required=False,
+                                   help_text="Staged base to build from (empty = the demo pair on the workhorse).")
+    version = forms.CharField(max_length=80, help_text="The new template version you're creating.")
+    ssh_user = forms.CharField(max_length=50, initial="root",
+                               help_text="SSH user inside the guest (for command batches).")
+
+
+@admin_page
+def build_start(request):
+    if request.method == "POST":
+        form = BuildStartForm(request.POST)
+        if form.is_valid():
+            try:
+                build = lab_services.start_build(
+                    request.user,
+                    host_id=form.cleaned_data["host"].id,
+                    role=form.cleaned_data["role"],
+                    version=form.cleaned_data["version"].strip(),
+                    base_version=form.cleaned_data["base_version"].strip(),
+                    ssh_user=form.cleaned_data["ssh_user"].strip(),
+                )
+                messages.success(request, "Build VM booting. Give it a moment, then open its console.")
+                return redirect("manage-build", build_id=build.id)
+            except lab_services.ServiceError as error:
+                messages.error(request, error.message)
+        else:
+            messages.error(request, "Check the form fields.")
+    active = lab_services.MachineBuild.objects.filter(
+        state__in=(lab_services.MachineBuild.State.STARTING, lab_services.MachineBuild.State.READY)
+    ).select_related("host")
+    return render(request, "manage/build_start.html", {
+        "form": form, "active_builds": active,
+    })
+
+
+@admin_page
+def build_detail(request, build_id):
+    from .models import MachineBuild
+
+    build = get_object_or_404(MachineBuild.objects.select_related("host"), pk=build_id)
+    base_versions = list(MachineImage.objects.filter(
+        role=build.role).values_list("version", flat=True))
+    return render(request, "manage/build_detail.html", {
+        "build": build,
+        "base_versions": base_versions,
+        "console_url": f"/guacamole/{_host_slug(build.host.name)}/#/client/"
+                       if settings.GUACAMOLE_INSTANCE_PATHS else None,
+    })
+
+
+@admin_page
+def build_exec(request, build_id):
+    from .models import MachineBuild
+
+    build = get_object_or_404(MachineBuild, pk=build_id)
+    if request.method == "POST":
+        script = request.POST.get("script", "")
+        password = request.POST.get("ssh_password", "")
+        try:
+            lab_services.run_build_command(request.user, build.id, script=script, ssh_password=password)
+            messages.success(request, "Command batch queued. Output appears here when it completes.")
+        except lab_services.ServiceError as error:
+            messages.error(request, error.message)
+    return redirect("manage-build", build_id=build.id)
+
+
+@admin_page
+def build_action(request, build_id):
+    """Capture / discard a build, with the shared confirm flow."""
+    from .models import MachineBuild
+
+    build = get_object_or_404(MachineBuild, pk=build_id)
+    if request.method != "POST":
+        return redirect("manage-build", build_id=build.id)
+    action = request.POST.get("do", "")
+    try:
+        if action == "capture":
+            lab_services.capture_build(request.user, build.id)
+            messages.success(request, "Capture queued: shutdown, disk compaction, template write.")
+        elif action == "discard":
+            lab_services.discard_build(request.user, build.id)
+            messages.success(request, "Discard queued: the build guest and its scratch disk are destroyed.")
+        else:
+            messages.error(request, "Unknown build action.")
+    except lab_services.ServiceError as error:
+        messages.error(request, error.message)
+    return redirect("manage-build", build_id=build.id)
+
+
+@admin_page
+def build_console(request, build_id):
+    """Guacamole grant for the build guest's VNC (attacker-role builds)."""
+    from .models import MachineBuild
+
+    build = get_object_or_404(MachineBuild.objects.select_related("host"), pk=build_id)
+    try:
+        return redirect(lab_services.issue_build_grant(request.user, build))
+    except lab_services.GrantError as error:
+        messages.error(request, error.message)
+        return redirect("manage-build", build_id=build.id)
 
 
 @admin_page

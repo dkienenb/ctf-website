@@ -131,6 +131,20 @@ class LibvirtExecutor:
     ROLES = ("attacker", "target")
     TEMPLATE_FILES = ("domain.xml", "disk-template")
     STAGING_DIRNAME = ".staging"
+    BUILD_NET_NAME = "ctf-build-net"
+    BUILD_NET_XML = (
+        "<network>\n"
+        f"  <name>{BUILD_NET_NAME}</name>\n"
+        "  <bridge name='ctfbuildbr0' stp='off' delay='0'/>\n"
+        "  <forward mode='nat'/>\n"
+        "  <ip address='10.250.0.1' netmask='255.255.255.0'>\n"
+        "    <dhcp>\n"
+        "      <range start='10.250.0.10' end='10.250.0.50'/>\n"
+        "    </dhcp>\n"
+        "  </ip>\n"
+        "</network>\n"
+    )
+    BUILD_VNC_PORT = "6911"  # labs use 5900..6899; builds live outside that range
 
     def _check_name(self, value, what):
         if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,79}", str(value or "")):
@@ -284,6 +298,190 @@ class LibvirtExecutor:
             shutil.rmtree(directory)
             return {"removed": f"{role}/{version}"}
         return {"removed": None}
+
+    # --- interactive template building (§10) -----------------------------
+    # One build slot per host: a scratch VM booted from a staged base (or the
+    # demo pair), customized by the operator (desktop console + SSH command
+    # batches), then captured as a new versioned template. Build guests live
+    # on an isolated network outside the per-lab range.
+
+    def build_domain(self, role):
+        self._check_name(role, "role")
+        if role not in self.ROLES:
+            raise AgentError(f"unknown template role: {role}")
+        return f"ctf-build-{role}"
+
+    def _ensure_build_net(self):
+        code, out = self.virsh_probe("net-info", self.BUILD_NET_NAME)
+        if code == 0 and "Active:     yes" in out:
+            return
+        xml_path = self.disks_dir / f"{self.BUILD_NET_NAME}.xml"
+        xml_path.write_text(self.BUILD_NET_XML)
+        if code != 0:
+            self.virsh("net-define", str(xml_path))
+        self.virsh_tolerant("net-autostart", self.BUILD_NET_NAME)
+        self.virsh_tolerant("net-start", self.BUILD_NET_NAME)
+
+    def _build_disk(self, role):
+        return self.disks_dir / f"{self.build_domain(role)}.qcow2"
+
+    def build_start(self, command):
+        """Boot a scratch build VM from a staged base (or the demo pair)."""
+        payload = command["payload"]
+        role = self._check_name(payload.get("role", ""), "role")
+        if role not in self.ROLES:
+            raise AgentError(f"unknown template role: {role}")
+        new_version = self._check_name(payload.get("version", ""), "template version")
+        base_version = payload.get("base_version", "")
+        domain = self.build_domain(role)
+        if self.domain_exists(domain):
+            raise AgentError(
+                f"build slot busy: {domain} exists (capture or discard it first)"
+            )
+        base_dir = self.template_dir(role, base_version)
+        base_xml = base_dir / "domain.xml"
+        base_disk = base_dir / "disk-template"
+        if not base_xml.exists() or not base_disk.exists():
+            raise AgentError(f"missing base template: {base_dir} (template content is owner-supplied)")
+        self._ensure_build_net()
+        build_disk = self._build_disk(role)
+        self._ensure_disk(build_disk, base_disk, payload)
+        xml = (base_xml.read_text()
+               .replace("@NAME@", domain)
+               .replace("@DISK@", str(build_disk))
+               .replace("@VNC_PORT@", self.BUILD_VNC_PORT)
+               .replace("@LAB_NET@", self.BUILD_NET_NAME))
+        xml_path = self.disks_dir / f"{domain}.xml"
+        xml_path.write_text(xml)
+        self.virsh("define", str(xml_path))
+        self.virsh("start", domain)
+        return {"build": domain, "role": role, "version": new_version, "vnc_port": self.BUILD_VNC_PORT}
+
+    def build_status(self, command):
+        payload = command["payload"]
+        role = payload.get("role", "")
+        domain = self.build_domain(role)
+        ip = self._build_guest_ip()
+        return {"build": domain, "state": self.domain_state(domain), "guest_ip": ip}
+
+    def _build_guest_ip(self):
+        """The build guest's DHCP lease on the build network ('' until up)."""
+        code, out = self.virsh_probe("net-dhcp-leases", self.BUILD_NET_NAME)
+        if code != 0:
+            return ""
+        for line in out.splitlines():
+            parts = line.split()
+            if len(parts) >= 5 and parts[1].count(".") == 3:
+                return parts[1]
+        return ""
+
+    def _run_ssh(self, guest_ip, ssh_user, password, script, timeout=300):
+        """Run a command batch in the build guest over SSH. Overridable in tests."""
+        if password:
+            command = ["sshpass", "-p", password, "ssh", "-o", "StrictHostKeyChecking=no",
+                       "-o", "UserKnownHostsFile=/dev/null", "-o", "ConnectTimeout=15",
+                       f"{ssh_user}@{guest_ip}", "sh -s"]
+        else:
+            command = ["ssh", "-o", "StrictHostKeyChecking=no",
+                       "-o", "UserKnownHostsFile=/dev/null", "-o", "ConnectTimeout=15",
+                       f"{ssh_user}@{guest_ip}", "sh -s"]
+        result = subprocess.run(command, input=script, capture_output=True, text=True, timeout=timeout)
+        return result.returncode, result.stdout, result.stderr
+
+    def build_exec(self, command):
+        """Run an operator-authored command batch inside the build guest."""
+        payload = command["payload"]
+        role = payload.get("role", "")
+        domain = self.build_domain(role)
+        if self.domain_state(domain) != "running":
+            raise AgentError(f"build guest {domain} is not running")
+        guest_ip = self._build_guest_ip()
+        if not guest_ip:
+            raise AgentError("build guest has no DHCP lease yet; retry shortly")
+        ssh_user = payload.get("ssh_user") or "root"
+        password = payload.get("ssh_password") or ""
+        script = payload.get("script") or ""
+        if not isinstance(script, str) or not script.strip():
+            raise AgentError("build-exec requires a nonempty script")
+        try:
+            exit_code, out, err = self._run_ssh(guest_ip, ssh_user, password, script)
+        except subprocess.TimeoutExpired:
+            raise AgentError("build-exec timed out (300s)")
+        return {"exit_code": exit_code, "stdout": out[:8000], "stderr": err[:4000], "guest_ip": guest_ip}
+
+    def _compact_disk(self, source, destination):
+        """Compact a build disk into a fresh template image (qemu-img convert)."""
+        result = subprocess.run(
+            ["qemu-img", "convert", "-O", "qcow2", str(source), str(destination)],
+            capture_output=True, text=True, timeout=1800, check=True,
+        )
+        return result
+
+    def _graceful_shutdown(self, domain):
+        """Attempt a clean ACPI shutdown, then force-off as the fallback."""
+        self.virsh_tolerant("shutdown", domain)
+        for _ in range(15):
+            if self.domain_state(domain) in ("shut off", "shutoff"):
+                return
+            time.sleep(2)
+        self.virsh_tolerant("destroy", domain)
+
+    def build_capture(self, command):
+        """Capture the customized build disk as a new versioned template.
+
+        The base template's domain.xml is copied UNCHANGED — placeholders
+        intact (§10) — while the customized disk becomes the new
+        disk-template. Sizing stays operator-set on the challenge pin."""
+        payload = command["payload"]
+        role = self._check_name(payload.get("role", ""), "role")
+        if role not in self.ROLES:
+            raise AgentError(f"unknown template role: {role}")
+        version = self._check_name(payload.get("version", ""), "template version")
+        domain = self.build_domain(role)
+        if not self.domain_exists(domain):
+            raise AgentError(f"no build guest to capture: {domain}")
+        build_disk = self._build_disk(role)
+        if not build_disk.exists():
+            raise AgentError(f"build disk missing: {build_disk}")
+        self._graceful_shutdown(domain)
+        target_dir = self.images_dir / role / version
+        if target_dir.exists():
+            raise AgentError(f"template version already exists: {role}/{version}")
+        target_dir.mkdir(parents=True)
+        base_xml = self.images_dir / role / "domain.xml"
+        base_version = payload.get("base_version", "")
+        if base_version:
+            base_xml = self.template_dir(role, base_version) / "domain.xml"
+        if not base_xml.exists():
+            raise AgentError(f"base template xml missing: {base_xml}")
+        shutil.copy2(base_xml, target_dir / "domain.xml")
+        converted = target_dir / ".capturing"
+        self._compact_disk(build_disk, converted)
+        hasher = hashlib.sha256()
+        size = 0
+        with converted.open("rb") as src:
+            for block in iter(lambda: src.read(1024 * 1024), b""):
+                hasher.update(block)
+                size += len(block)
+        os.replace(converted, target_dir / "disk-template")
+        self.virsh_tolerant("undefine", domain)
+        build_disk.unlink(missing_ok=True)
+        (self.disks_dir / f"{domain}.xml").unlink(missing_ok=True)
+        return {
+            "captured": f"{role}/{version}", "sha256": hasher.hexdigest(),
+            "size": size, "host_local": True,
+        }
+
+    def build_discard(self, command):
+        """Destroy the build guest and its scratch disk without capturing."""
+        payload = command["payload"]
+        role = payload.get("role", "")
+        domain = self.build_domain(role)
+        self._graceful_shutdown(domain)
+        self.virsh_tolerant("undefine", domain)
+        self._build_disk(role).unlink(missing_ok=True)
+        (self.disks_dir / f"{domain}.xml").unlink(missing_ok=True)
+        return {"discarded": domain}
 
     # --- operations -------------------------------------------------------
 
@@ -508,6 +706,11 @@ VOCABULARY = {
     "template-verify": lambda executor, command: executor.template_verify(command),
     "template-remove": lambda executor, command: executor.template_remove(command),
     "template-list": lambda executor, command: executor.template_inventory(),
+    "build-start": lambda executor, command: executor.build_start(command),
+    "build-status": lambda executor, command: executor.build_status(command),
+    "build-exec": lambda executor, command: executor.build_exec(command),
+    "build-capture": lambda executor, command: executor.build_capture(command),
+    "build-discard": lambda executor, command: executor.build_discard(command),
 }
 
 

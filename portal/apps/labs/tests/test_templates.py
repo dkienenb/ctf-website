@@ -10,7 +10,7 @@ from django.urls import reverse
 
 from portal.apps.accounts.models import User
 from portal.apps.content.models import Challenge
-from portal.apps.testutils import make_question, make_user
+from portal.apps.testutils import make_host, make_question, make_user
 from portal.apps.labs.models import Host, HostCommand, LabInstance, LabTemplate, MachineImage, QueueEntry
 from portal.apps.labs import services
 from portal.apps.submissions.models import DataRevision
@@ -213,6 +213,80 @@ class MachineImageServiceTests(TestCase):
                                     follow=True)
         self.assertContains(response, "still holds lab slots")
         self.assertTrue(LabInstance.objects.filter(challenge=challenge).exists())
+
+
+    def test_build_lifecycle_through_services_and_results(self):
+        from portal.apps.labs.models import MachineBuild
+        from portal.apps.labs.models import MachineBuild
+
+        host = make_host("build-host")
+        build = services.start_build(
+            self.admin, host_id=host.id, role="attacker",
+            version="kali-v7", base_version="", ssh_user="root",
+        )
+        self.assertEqual(build.state, MachineBuild.State.STARTING)
+        start_cmd = HostCommand.objects.get(op_id=f"build-{build.id}-start")
+        self.assertEqual(start_cmd.operation, "build-start")
+        # Agent boots it: result folds into the record.
+        services.complete_command(host, start_cmd.op_id, "ok",
+                                  {"build": "ctf-build-attacker", "vnc_port": "6911"})
+        build.refresh_from_db()
+        self.assertEqual(build.state, MachineBuild.State.READY)
+        self.assertEqual(build.vnc_port, "6911")
+        # One build slot per host.
+        with self.assertRaises(ServiceError) as error:
+            services.start_build(self.admin, host_id=host.id, role="target",
+                                 version="target-v7", base_version="")
+        self.assertIn("already has an active build", error.exception.message)
+        # Command batch queues an exec with the payload the agent needs.
+        cmd = services.run_build_command(self.admin, build.id, script="id; uname -a")
+        self.assertEqual(cmd.operation, "build-exec")
+        self.assertEqual(cmd.payload["script"], "id; uname -a")
+        exec_result = services.complete_command(host, cmd.op_id, "ok",
+                                                {"exit_code": 0, "stdout": "root", "guest_ip": "10.250.0.10"})
+        build.refresh_from_db()
+        self.assertEqual(build.guest_ip, "10.250.0.10")
+        self.assertEqual(build.last_output["exit_code"], 0)
+        # Capture creates a HOST-LOCAL machine image from the agent's sha.
+        sha = hashlib.sha256(b"captured-disk").hexdigest()
+        cap_cmd = services.capture_build(self.admin, build.id)
+        services.complete_command(host, cap_cmd.op_id, "ok",
+                                  {"captured": "attacker/kali-v7", "sha256": sha, "size": 42})
+        build.refresh_from_db()
+        self.assertEqual(build.state, MachineBuild.State.CAPTURED)
+        image = MachineImage.objects.get(role="attacker", version="kali-v7")
+        self.assertEqual(image.disk_sha256, sha)
+        self.assertFalse(image.disk_file)  # host-local: no controller-side file
+        self.assertIn("host-local", image.notes)
+        # Distributing a host-local image is refused until the file is uploaded.
+        with self.assertRaises(ServiceError):
+            services.distribute_machine_image(self.admin, image.id)
+
+    def test_build_requires_admin_and_ready_state(self):
+        from portal.apps.labs.models import MachineBuild
+
+        host = make_host("build-host-2")
+        with self.assertRaises(ServiceError):
+            services.start_build(self.user, host_id=host.id, role="attacker",
+                                 version="kali-x", base_version="")
+        build = services.start_build(self.admin, host_id=host.id, role="attacker",
+                                     version="kali-x", base_version="")
+        with self.assertRaises(ServiceError):
+            services.run_build_command(self.admin, build.id, script="ls")  # not ready yet
+        disc = services.discard_build(self.admin, build.id)
+        services.complete_command(host, disc.op_id, "ok", {"discarded": "ctf-build-attacker"})
+        with self.assertRaises(ServiceError):
+            services.discard_build(self.admin, build.id)  # already discarded
+
+    def test_duplicate_version_name_refused_at_start(self):
+        from portal.apps.labs.models import MachineBuild
+
+        host = make_host("build-host-3")
+        MachineImage.objects.create(role="attacker", version="exists", domain_xml="<x/>")
+        with self.assertRaises(ServiceError) as error:
+            services.start_build(self.admin, host_id=host.id, role="attacker",
+                                 version="exists", base_version="")
+        self.assertEqual(error.exception.status, 409)
 
 
 class MachineImagePageTests(TestCase):

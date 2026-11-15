@@ -300,10 +300,17 @@ def complete_command(host, op_id, status, result):
         command.save(update_fields=("status", "result", "updated_at"))
         if command.lab:
             _apply_command_result(command)
+        elif command.operation.startswith("build-"):
+            _apply_command_result(command)
     return {"message": "Command recorded.", "status": command.status}
 
 
 def _apply_command_result(command):
+    if command.operation.startswith("build-"):
+        # Build commands carry no lab FK; their results fold into the
+        # MachineBuild record instead (§10 interactive template building).
+        _apply_build_result(command, command.status == HostCommand.Status.COMPLETED)
+        return
     lab = LabInstance.objects.select_for_update().get(pk=command.lab_id)
     operation, ok = command.operation, command.status == HostCommand.Status.COMPLETED
     if operation == "allocate":
@@ -360,6 +367,8 @@ def _apply_command_result(command):
         if not ok:
             # The host could not enforce the refresh; do not pretend it is live (§18).
             _notify(lab.user_id, "The workhorse could not acknowledge your lease refresh. Your previous expiry stands.")
+    elif operation.startswith("build-"):
+        _apply_build_result(command, ok)
 
 
 def request_admin_reset(user, challenge_id):
@@ -644,3 +653,141 @@ def lab_template_clear(actor, challenge_id):
                               payload={"challenge": challenge.id, "instances_discarded": removed})
     DataRevision.bump()
     return {"instances_discarded": removed}
+
+
+# --- Interactive template building (§10) --------------------------------------
+
+def start_build(actor, *, host_id, role, version, base_version="", ssh_user="root"):
+    """Boot a scratch build VM on a workhorse (one build slot per host)."""
+    from portal.apps.submissions.models import DataRevision
+    from .models import MachineBuild
+
+    if actor is None or not getattr(actor, "is_admin", False):
+        raise ServiceError("Administrator access is required.", 403)
+    if role not in MachineImage.Role.values:
+        raise ServiceError("Role must be attacker or target.", 400)
+    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,79}", version or ""):
+        raise ServiceError("Version must start with a letter or digit and use only letters, digits, dots, dashes, underscores.", 400)
+    if MachineImage.objects.filter(role=role, version=version).exists():
+        raise ServiceError("That version already exists; pick another name.", 409)
+    active = MachineBuild.objects.filter(
+        host_id=host_id, state__in=(MachineBuild.State.STARTING, MachineBuild.State.READY))
+    if active.exists():
+        raise ServiceError("This workhorse already has an active build. Capture or discard it first.", 409)
+    try:
+        host = Host.objects.get(pk=host_id, online=True)
+    except Host.DoesNotExist:
+        raise ServiceError("Host not found or offline.", 404)
+    if not host.admits:
+        raise ServiceError("This workhorse is not admitting new machines.", 409)
+    with transaction.atomic():
+        build = MachineBuild.objects.create(
+            host=host, role=role, version=version, base_version=base_version,
+            ssh_user=ssh_user or "root",
+        )
+        HostCommand.objects.create(
+            op_id=f"build-{build.id}-start", host=host, operation="build-start",
+            payload={"role": role, "version": version, "base_version": base_version},
+            expected_generation=1,
+        )
+    DataRevision.bump()
+    return build
+
+
+def run_build_command(actor, build_id, *, script, ssh_password=""):
+    """Queue an operator-authored command batch into the running build guest."""
+    from .models import MachineBuild
+
+    if actor is None or not getattr(actor, "is_admin", False):
+        raise ServiceError("Administrator access is required.", 403)
+    build = MachineBuild.objects.get(pk=build_id)
+    if build.state != MachineBuild.State.READY:
+        raise ServiceError("The build guest is not ready (boot it first).", 409)
+    if not isinstance(script, str) or not script.strip():
+        raise ServiceError("The command batch is empty.")
+    command = HostCommand.objects.create(
+        op_id=f"build-{build.id}-exec-{secrets.token_hex(4)}", host=build.host,
+        operation="build-exec",
+        payload={"role": build.role, "script": script,
+                 "ssh_user": build.ssh_user, "ssh_password": ssh_password},
+        expected_generation=1,
+    )
+    return command
+
+
+def capture_build(actor, build_id):
+    """Capture the customized build disk as a host-local template version."""
+    from .models import MachineBuild
+
+    if actor is None or not getattr(actor, "is_admin", False):
+        raise ServiceError("Administrator access is required.", 403)
+    build = MachineBuild.objects.get(pk=build_id)
+    if build.state not in (MachineBuild.State.READY, MachineBuild.State.FAILED):
+        raise ServiceError("Only an active build can be captured.", 409)
+    command = HostCommand.objects.create(
+        op_id=f"build-{build.id}-capture", host=build.host,
+        operation="build-capture",
+        payload={"role": build.role, "version": build.version,
+                 "base_version": build.base_version},
+        expected_generation=1,
+    )
+    return command
+
+
+def discard_build(actor, build_id):
+    """Destroy the scratch build VM without capturing."""
+    from .models import MachineBuild
+
+    if actor is None or not getattr(actor, "is_admin", False):
+        raise ServiceError("Administrator access is required.", 403)
+    build = MachineBuild.objects.get(pk=build_id)
+    if build.state not in (MachineBuild.State.STARTING, MachineBuild.State.READY, MachineBuild.State.FAILED):
+        raise ServiceError("Only an active build can be discarded.", 409)
+    command = HostCommand.objects.create(
+        op_id=f"build-{build.id}-discard", host=build.host,
+        operation="build-discard", payload={"role": build.role},
+        expected_generation=1,
+    )
+    return command
+
+
+def _apply_build_result(command, ok):
+    """Fold a build command's result into the MachineBuild record."""
+    from .models import MachineBuild
+
+    op_id = command.op_id
+    build_id = int(op_id.split("-")[1]) if op_id.startswith("build-") else None
+    if build_id is None:
+        return
+    try:
+        build = MachineBuild.objects.select_for_update().get(pk=build_id)
+    except MachineBuild.DoesNotExist:
+        return
+    detail = command.result or {}
+    if command.operation == "build-start":
+        build.state = MachineBuild.State.READY if ok else MachineBuild.State.FAILED
+        build.vnc_port = detail.get("vnc_port", "") if ok else ""
+    elif command.operation == "build-exec":
+        build.guest_ip = detail.get("guest_ip", "") or build.guest_ip
+        build.last_output = {"exit_code": detail.get("exit_code"), "stdout": detail.get("stdout", ""),
+                             "stderr": detail.get("stderr", ""), "failed": not ok}
+    elif command.operation == "build-capture":
+        if ok:
+            sha, size = detail.get("sha256", ""), detail.get("size", 0)
+            image, _ = MachineImage.objects.update_or_create(
+                role=build.role, version=build.version,
+                defaults={
+                    "domain_xml": "", "disk_file": None,
+                    "disk_sha256": sha, "disk_size": size,
+                    "notes": f"Captured on {build.host.name} from base "
+                             f"{build.base_version or 'demo'} (host-local; upload the disk "
+                             "to distribute fleet-wide).",
+                    "uploaded_by": None,
+                },
+            )
+            build.state = MachineBuild.State.CAPTURED
+        else:
+            build.state = MachineBuild.State.FAILED
+    elif command.operation == "build-discard":
+        build.state = MachineBuild.State.DISCARDED if ok else MachineBuild.State.FAILED
+    build.save()

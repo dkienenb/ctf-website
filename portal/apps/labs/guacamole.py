@@ -106,16 +106,30 @@ def issue_grant(user, lab, *, vnc_port=None):
         raise GrantError("The lab's workhorse has not reported its management address yet.")
     vnc_host = "127.0.0.1"
     vnc_port = str(vnc_port if vnc_port is not None else vnc_port_for(lab))
+    return _grant(user, f"lab-{lab.id}", vnc_host, vnc_port, lab.host.name)
+
+
+def issue_build_grant(user, build):
+    """A grant for an interactive template-build guest's VNC (attacker-role
+    builds; targets are provisioned over SSH and have no console)."""
+    if not build.host or not build.host.management_ip:
+        raise GrantError("The build's workhorse has not reported its management address yet.")
+    if not build.vnc_port:
+        raise GrantError("The build guest is not booted yet (no console port assigned).")
+    return _grant(user, f"build-{build.id}", "127.0.0.1", str(build.vnc_port), build.host.name)
+
+
+def _grant(user, connection_id, vnc_host, vnc_port, host_name):
     payload = {
         "username": user.discord_id,
         "expires": int(time.time() * 1000) + GRANT_TTL_MS,
         "connections": {
-            f"lab-{lab.id}": {
-                "id": f"lab-{lab.id}",
+            connection_id: {
+                "id": connection_id,
                 "protocol": "vnc",
                 "parameters": {
                     "hostname": vnc_host,
-                    "port": vnc_port,
+                    "port": str(vnc_port),
                 },
             }
         },
@@ -126,12 +140,10 @@ def issue_grant(user, lab, *, vnc_port=None):
     # `data` parameter from WITHIN the URL fragment (Angular hashbang
     # routing). As of Guacamole 1.6.0, client URLs address connections via a
     # base64url-encoded identifier of the form "<id>\0<type>\0<dataSource>"
-    # (type "c" = connection) — see ClientIdentifier.toString in the SPA
-    # (app/navigation/types/ClientIdentifier.js). The older flat
-    # "<dataSource>.<connectionId>" form decodes into garbage and the webapp
-    # kills the tunnel with "Illegal identifier - unknown type" before it
-    # ever dials guacd.
-    connection_id = f"lab-{lab.id}"
+    # (type "c" = connection) — see ClientIdentifier.toString in the SPA.
+    # The older flat "<dataSource>.<connectionId>" form decodes into garbage
+    # and the webapp kills the tunnel with "Illegal identifier - unknown
+    # type" before it ever dials guacd.
     fragment_id = _client_url_identifier(connection_id)
-    base = instance_base_path(lab.host.name)
+    base = instance_base_path(host_name)
     return f"{base}#/client/{fragment_id}?data={quote(data)}"

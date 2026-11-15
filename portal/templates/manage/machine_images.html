@@ -9,6 +9,7 @@
 {% if hosts %}
 <p class="muted small">Workhorse inventory is refreshed by each agent heartbeat ({{ hosts|length }} host{{ hosts|pluralize }}).</p>
 {% endif %}
+<p><a class="btn secondary" href="{% url 'manage-build-start' %}">Build a new template (spin up a VM, run commands, capture)</a></p>
 
 {% for row in images %}
   <section class="panel">

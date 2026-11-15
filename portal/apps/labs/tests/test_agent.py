@@ -124,6 +124,16 @@ class AgentExecutorTests(TestCase):
 
             def virsh_tolerant(self, *args):
                 self.calls.append(args)
+                # A destroy/shutdown call models the guest leaving "running".
+
+            def domain_state(self, name):
+                destroyed = any(
+                    call[0] in ("destroy", "shutdown") and len(call) > 1 and call[1] == name
+                    for call in self.calls
+                )
+                if destroyed:
+                    return "shut off"
+                return "running" if name in getattr(self, "existing", set()) else "unknown"
 
             def virsh_probe(self, *args):
                 self.calls.append(args)
@@ -143,7 +153,104 @@ class AgentExecutorTests(TestCase):
         executor.disks_dir.mkdir(parents=True)
         return executor
 
-    def test_vocabulary_is_restricted(self):
+    def test_build_lifecycle_ops(self):
+        """build-start boots a scratch guest on the build network with the
+        base template; build-discard tears it down without capturing."""
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmp:
+            executor = self._executor(tmp)
+            for role in ("attacker", "target"):
+                (executor.images_dir / role).mkdir(parents=True)
+                (executor.images_dir / role / "domain.xml").write_text(
+                    "<domain><name>@NAME@</name><disk>@DISK@</disk>"
+                    "<vnc>@VNC_PORT@</vnc><net>@LAB_NET@</net></domain>")
+                (executor.images_dir / role / "disk-template").write_bytes(b"base")
+            detail = workhorse_agent.execute(executor, {
+                "op_id": "b1", "operation": "build-start",
+                "payload": {"role": "attacker", "version": "kali-v2", "base_version": ""},
+            })
+            self.assertEqual(detail["vnc_port"], "6911")  # outside the lab port range
+            defines = [call for call in executor.calls if call[0] == "define"]
+            xml = (executor.disks_dir / "ctf-build-attacker.xml").read_text()
+            self.assertIn("ctf-build-attacker", xml)
+            self.assertIn("ctf-build-net", xml)
+            self.assertIn("6911", xml)
+            # A second start while the slot is busy is refused.
+            executor.existing = {"ctf-build-attacker"}
+            with self.assertRaises(workhorse_agent.AgentError) as error:
+                workhorse_agent.execute(executor, {
+                    "op_id": "b2", "operation": "build-start",
+                    "payload": {"role": "attacker", "version": "kali-v3", "base_version": ""}})
+            self.assertIn("build slot busy", str(error.exception))
+            # Discard destroys the guest and its scratch disk.
+            (executor.disks_dir / "ctf-build-attacker.qcow2").write_bytes(b"d")
+            detail = workhorse_agent.execute(executor, {
+                "op_id": "b3", "operation": "build-discard", "payload": {"role": "attacker"}})
+            self.assertEqual(detail["discarded"], "ctf-build-attacker")
+            self.assertFalse((executor.disks_dir / "ctf-build-attacker.qcow2").exists())
+
+    def test_build_exec_requires_running_guest_and_script(self):
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmp:
+            executor = self._executor(tmp)
+            with self.assertRaises(workhorse_agent.AgentError):
+                workhorse_agent.execute(executor, {
+                    "op_id": "e1", "operation": "build-exec",
+                    "payload": {"role": "attacker", "script": "ls"}})
+            executor.existing = set()
+            executor.domain_state = lambda name: "running"
+            executor._build_guest_ip = lambda: "10.250.0.10"
+            with self.assertRaises(workhorse_agent.AgentError):
+                workhorse_agent.execute(executor, {
+                    "op_id": "e2", "operation": "build-exec",
+                    "payload": {"role": "attacker", "script": "   "}})
+            captured = {}
+            executor._run_ssh = lambda ip, user, pw, script, timeout=300: (
+                captured.update(ip=ip, user=user, script=script) or (0, "done", ""))
+            detail = workhorse_agent.execute(executor, {
+                "op_id": "e3", "operation": "build-exec",
+                "payload": {"role": "attacker", "script": "apt-get install -y htop",
+                            "ssh_user": "root"}})
+            self.assertEqual(detail["exit_code"], 0)
+            self.assertEqual(captured["ip"], "10.250.0.10")
+            self.assertEqual(captured["user"], "root")
+            self.assertIn("apt-get", captured["script"])
+
+    def test_build_capture_writes_template_and_reports_sha(self):
+        import hashlib
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmp:
+            executor = self._executor(tmp)
+            (executor.images_dir / "attacker").mkdir(parents=True)
+            (executor.images_dir / "attacker" / "domain.xml").write_text(
+                "<domain><name>@NAME@</name></domain>")
+            executor.existing = {"ctf-build-attacker"}
+            executor.domain_state = lambda name: "shut off"
+            executor._compact_disk = lambda src, dst: dst.write_bytes(b"customized-disk")
+            (executor.disks_dir / "ctf-build-attacker.qcow2").write_bytes(b"dirty")
+            detail = workhorse_agent.execute(executor, {
+                "op_id": "c1", "operation": "build-capture",
+                "payload": {"role": "attacker", "version": "kali-v9", "base_version": ""}})
+            self.assertEqual(detail["captured"], "attacker/kali-v9")
+            self.assertEqual(detail["sha256"], hashlib.sha256(b"customized-disk").hexdigest())
+            # Placeholders survive the capture: the template stays generic (§10).
+            xml = (executor.images_dir / "attacker" / "kali-v9" / "domain.xml").read_text()
+            self.assertIn("@NAME@", xml)
+            self.assertEqual((executor.images_dir / "attacker" / "kali-v9" / "disk-template").read_bytes(),
+                             b"customized-disk")
+            # Capturing an already-existing version is refused.
+            executor.existing = {"ctf-build-attacker"}
+            (executor.disks_dir / "ctf-build-attacker.qcow2").write_bytes(b"dirty-again")
+            with self.assertRaises(workhorse_agent.AgentError) as error:
+                workhorse_agent.execute(executor, {
+                    "op_id": "c2", "operation": "build-capture",
+                    "payload": {"role": "attacker", "version": "kali-v9", "base_version": ""}})
+            self.assertIn("already exists", str(error.exception))
+
+    def test_vocabulary_remains_restricted_and_closed(self):
         with self.assertRaises(workhorse_agent.AgentError):
             workhorse_agent.execute(None, {"operation": "shell", "payload": {"cmd": "rm -rf /"}})
         with self.assertRaises(workhorse_agent.AgentError):

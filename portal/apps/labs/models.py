@@ -101,6 +101,41 @@ class Host(models.Model):
         return self.online and not self.heartbeat_stale and disk_ok and ram_ok
 
 
+class MachineBuild(models.Model):
+    """An interactive template build (one scratch VM per host, §10).
+
+    The operator boots a scratch guest from a staged base, customizes it
+    (desktop console + SSH command batches), then captures its disk as a new
+    versioned template. Captures are HOST-LOCAL: the sha is computed on the
+    workhorse, so the MachineImage record has no controller-side file until
+    someone uploads one for fleet-wide distribution."""
+
+    class State(models.TextChoices):
+        STARTING = "starting", "Booting"
+        READY = "ready", "Ready (customize via console / SSH)"
+        CAPTURED = "captured", "Captured"
+        DISCARDED = "discarded", "Discarded"
+        FAILED = "failed", "Failed"
+
+    host = models.ForeignKey(Host, on_delete=models.CASCADE, related_name="builds")
+    role = models.CharField(max_length=12, choices=MachineImage.Role.choices)
+    base_version = models.CharField(max_length=80, blank=True)
+    version = models.CharField(max_length=80)
+    ssh_user = models.CharField(max_length=50, default="root")
+    state = models.CharField(max_length=12, choices=State.choices, default=State.STARTING)
+    vnc_port = models.CharField(max_length=6, blank=True)
+    guest_ip = models.CharField(max_length=45, blank=True)
+    last_output = models.JSONField(default=dict, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = "labs_machine_build"
+
+    def __str__(self):
+        return f"build {self.role}/{self.version} on {self.host.name} ({self.state})"
+
+
 class HostCommand(models.Model):
     """Durable command (handoff §18): stable id, target, expected generation,
     status, and result. Retries never duplicate destructive operations."""

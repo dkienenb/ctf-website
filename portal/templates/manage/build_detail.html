@@ -1,0 +1,50 @@
+{% extends "base.html" %}
+{% block title %}Build {{ build.role }}/{{ build.version }} — Administration{% endblock %}
+{% block content %}
+<p><a href="{% url 'manage-build-start' %}">← Back to builds</a></p>
+<h1>Build: {{ build.role }}/{{ build.version }}</h1>
+<p class="muted small">{{ build.host.name }} · base: {{ build.base_version|default:"demo pair" }} · state: {{ build.state }}{% if build.guest_ip %} · guest IP {{ build.guest_ip }}{% endif %}</p>
+
+<section class="panel">
+  <h2>Console</h2>
+  {% if build.role == 'attacker' and build.state == 'ready' and build.vnc_port %}
+    <p><a class="btn primary" href="{% url 'manage-build-console' build.id %}" target="_blank" rel="noopener">Open build console ↗</a></p>
+    <p class="muted small">Streams the build guest's desktop (VNC port {{ build.vnc_port }}). Targets have no console — provision them over SSH below.</p>
+  {% else %}
+    <p class="muted small">Console available once an attacker-role build is ready.</p>
+  {% endif %}
+</section>
+
+<section class="panel">
+  <h2>Command batch</h2>
+  <p class="muted small">Runs as a shell script inside the guest over SSH (as {{ build.ssh_user }}). Requires the guest to have SSH running and, for password auth, the password below. The demo ISO has none — enable SSH through the console first.</p>
+  <form method="post" action="{% url 'manage-build-exec' build.id %}">
+    {% csrf_token %}
+    <div class="field">
+      <label for="id_script">Script (sh)</label>
+      <textarea name="script" id="id_script" rows="6" placeholder="apt-get update && apt-get install -y qemu-guest-agent"></textarea>
+    </div>
+    <div class="field">
+      <label for="id_ssh_password">SSH password (optional)</label>
+      <input type="password" name="ssh_password" id="id_ssh_password" autocomplete="off">
+    </div>
+    <button class="btn primary" type="submit">Run batch</button>
+  </form>
+  {% if build.last_output %}
+    <p class="muted small">Last batch {% if build.last_output.failed %}FAILED{% endif %} (exit {{ build.last_output.exit_code }}):</p>
+    <pre class="build-output">{{ build.last_output.stdout }}{% if build.last_output.stderr %}
+
+STDERR:
+{{ build.last_output.stderr }}{% endif %}</pre>
+  {% endif %}
+</section>
+
+<section class="panel">
+  <h2>Finish</h2>
+  <div class="button-row">
+    <form method="post" action="{% url 'manage-build-action' build.id %}">{% csrf_token %}<input type="hidden" name="do" value="capture"><button class="btn primary" type="submit">Capture as template {{ build.role }}/{{ build.version }}</button></form>
+    <form method="post" action="{% url 'manage-build-action' build.id %}">{% csrf_token %}<input type="hidden" name="do" value="discard"><button class="btn danger" type="submit">Discard build</button></form>
+  </div>
+  <p class="muted small">Capture performs a graceful shutdown, compacts the disk, and writes the template onto {{ build.host.name }} (host-local — upload the disk file to distribute it fleet-wide).</p>
+</section>
+{% endblock %}

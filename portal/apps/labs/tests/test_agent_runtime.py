@@ -203,4 +203,5 @@ class AgentRuntimeTests(TestCase):
         self.assertEqual(allowed, {
             "allocate", "save", "reset-target", "reset-full", "recover",
             "refresh-lease", "template-put", "template-verify", "template-remove", "template-list",
+            "build-start", "build-status", "build-exec", "build-capture", "build-discard",
         })
