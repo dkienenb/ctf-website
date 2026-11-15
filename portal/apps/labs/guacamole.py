@@ -86,8 +86,8 @@ def issue_grant(user, lab, *, vnc_port=None):
     }
     key = _json_secret()
     data = base64.b64encode(_sign_and_encrypt(json.dumps(payload).encode(), key)).decode()
-    # Deep-link into the client for this connection; the SPA consumes the
-    # `data` parameter on any route and resolves the connection across the
-    # user's data sources.
+    # Deep-link into the client for this connection. The SPA consumes the
+    # `data` parameter from WITHIN the URL fragment (Angular hashbang
+    # routing), so the grant rides inside the fragment as well.
     connection_id = f"lab-{lab.id}"
-    return f"{GUAC_ORIGIN}?data={quote(data)}#/client/{connection_id}"
+    return f"{GUAC_ORIGIN}#/client/{connection_id}?data={quote(data)}"
