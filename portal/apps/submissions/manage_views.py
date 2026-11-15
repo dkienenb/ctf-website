@@ -117,6 +117,18 @@ QuestionFormSet = formset_factory(QuestionForm, extra=0)
 
 @admin_page
 def dashboard(request):
+    def _preapproval_rows():
+        """Recent pre-approvals with the current state of each Discord ID."""
+        rows = []
+        for decision in ApprovalDecision.objects.filter(decision="preapprove").order_by("-id")[:20]:
+            account = User.objects.filter(discord_id=decision.discord_id).first()
+            rows.append({
+                "decision": decision,
+                "account_pk": account.id if account else None,
+                "account_status": account.status if account else "",
+            })
+        return rows
+
     users = User.objects.order_by("id")
     questions = Question.objects.select_related("challenge").order_by("challenge__id", "display_order")
     hints = []
@@ -134,7 +146,7 @@ def dashboard(request):
         "hints": hints,
         "challenges": challenges,
         "labs": LabInstance.objects.select_related("host", "challenge").order_by("id"),
-        "preapprovals": ApprovalDecision.objects.order_by("-id")[:20],
+        "preapprovals": _preapproval_rows(),
         "preapprove_form": PreapproveForm(),
         "revision": DataRevision.current(),
     })

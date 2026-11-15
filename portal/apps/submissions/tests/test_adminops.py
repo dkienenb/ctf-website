@@ -42,6 +42,30 @@ class OperatorServiceTests(TestCase):
         self.assertEqual(response.status_code, 302)  # error toast, nothing created
         self.assertFalse(ApprovalDecision.objects.filter(decision="preapprove").exists())
 
+    def test_dashboard_shows_preapproved_ids_with_state(self):
+        """The operator sees existing pre-approvals: the ID, when it was
+        pre-approved, and whether an account has used it yet."""
+        self.client.force_login(self.admin)
+        adminops.preapprove(self.admin, "470000000000000001")  # no account yet
+        pending = make_user("470000000000000002", "Waiter", status=User.Status.PENDING)
+        adminops.preapprove(self.admin, pending.discord_id)   # upgrades the pending account
+        used = make_user("470000000000000003", "Already In")   # approved before the record
+        adminops.preapprove(self.admin, used.discord_id)
+
+        response = self.client.get(reverse("manage"))
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "470000000000000001")
+        self.assertContains(response, "470000000000000002")
+        self.assertContains(response, "awaiting first sign-in")
+        # Pre-approving an existing account upgrades it immediately, so the
+        # badge reads approved (there is no lingering "pending" state).
+        self.assertContains(response, "account: approved")
+        self.assertContains(response, "by Admin")  # the operator who pre-approved
+
+    def test_dashboard_empty_preapproval_list(self):
+        self.client.force_login(self.admin)
+        self.assertContains(self.client.get(reverse("manage")), "No pre-approved IDs yet.")
+
     def test_dashboard_renders_with_hint_redemptions(self):
         """Regression: the dashboard crashed with AttributeError on the first
         HintRedemption (recipient_id vs the model's user field)."""

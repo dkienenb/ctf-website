@@ -11,7 +11,24 @@
     {{ preapprove_form.discord_id }}
     <button class="btn secondary" type="submit">Pre-approve ID</button>
   </form>
-  <p class="muted small">{{ preapprovals|length }} recent approval records. Pre-approval requires no existing account.</p>
+  <p class="muted small">Pre-approval requires no existing account: the ID auto-approves at first sign-in.</p>
+  {% for item in preapprovals %}
+    <div class="row">
+      <div>
+        <strong>{{ item.decision.discord_id }}</strong>
+        <span class="muted small">pre-approved {{ item.decision.created_at|date:"Y-m-d H:i" }}{% if item.decision.actor %} by {{ item.decision.actor.cached_name|default:item.decision.actor.discord_id }}{% endif %}{% if item.decision.note %} — {{ item.decision.note }}{% endif %}</span>
+      </div>
+      <div class="button-row">
+        {% if item.account_pk %}
+          <span class="badge">account: {{ item.account_status }}</span>
+        {% else %}
+          <span class="badge">awaiting first sign-in</span>
+        {% endif %}
+      </div>
+    </div>
+  {% empty %}
+    <p class="muted small">No pre-approved IDs yet.</p>
+  {% endfor %}
   {% for account in users %}
     <div class="row">
       <div><strong>{{ account.cached_name|default:account.discord_id }}</strong> {% if account.is_admin %}<span class="badge">Admin</span>{% endif %}
