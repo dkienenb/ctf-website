@@ -294,6 +294,31 @@ class MachineImagePageTests(TestCase):
         self.admin = make_admin("910000000000000001")
         self.client.force_login(self.admin)
 
+    def test_build_pages_flow(self):
+        from portal.apps.labs.models import MachineBuild
+
+        host = make_host("page-build-host")
+        self.client.force_login(self.admin)
+        response = self.client.post(reverse("manage-build-start"), {
+            "host": host.id, "role": "attacker", "base_version": "",
+            "version": "kali-page", "ssh_user": "root",
+        })
+        self.assertEqual(response.status_code, 302)
+        build = MachineBuild.objects.get(version="kali-page")
+        # Boot the build by completing the start command, then visit the page.
+        services.complete_command(host, f"build-{build.id}-start", "ok", {"vnc_port": "6911"})
+        response = self.client.get(reverse("manage-build", args=[build.id]))
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Command batch")
+        self.assertContains(response, "Capture as template")
+        # The start page renders on GET too.
+        self.assertEqual(self.client.get(reverse("manage-build-start")).status_code, 200)
+        # Non-admins are bounced.
+        pleb = make_user("910000000000000009", "Pleb")
+        self.client.force_login(pleb)
+        self.assertEqual(self.client.get(reverse("manage-build-start")).status_code, 302)
+
+
     def test_create_via_page_and_list_matrix(self):
         disk = SimpleUploadedFile("disk-template", b"disk-content")
         response = self.client.post(reverse("manage-machine-image-new"), {

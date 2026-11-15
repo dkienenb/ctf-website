@@ -11,6 +11,8 @@ from django.shortcuts import get_object_or_404, redirect, render
 from django.contrib import messages
 
 from portal.apps.accounts.decorators import admin_page
+from .models import Host, MachineBuild, MachineImage
+from . import services as lab_services
 
 
 def _host_slug(host_name):
@@ -40,6 +42,9 @@ class BuildStartForm(forms.Form):
 
 @admin_page
 def build_start(request):
+    active = MachineBuild.objects.filter(
+        state__in=(MachineBuild.State.STARTING, MachineBuild.State.READY)
+    ).select_related("host")
     if request.method == "POST":
         form = BuildStartForm(request.POST)
         if form.is_valid():
@@ -58,9 +63,8 @@ def build_start(request):
                 messages.error(request, error.message)
         else:
             messages.error(request, "Check the form fields.")
-    active = lab_services.MachineBuild.objects.filter(
-        state__in=(lab_services.MachineBuild.State.STARTING, lab_services.MachineBuild.State.READY)
-    ).select_related("host")
+    else:
+        form = BuildStartForm()
     return render(request, "manage/build_start.html", {
         "form": form, "active_builds": active,
     })
@@ -68,7 +72,6 @@ def build_start(request):
 
 @admin_page
 def build_detail(request, build_id):
-    from .models import MachineBuild
 
     build = get_object_or_404(MachineBuild.objects.select_related("host"), pk=build_id)
     base_versions = list(MachineImage.objects.filter(
@@ -83,7 +86,6 @@ def build_detail(request, build_id):
 
 @admin_page
 def build_exec(request, build_id):
-    from .models import MachineBuild
 
     build = get_object_or_404(MachineBuild, pk=build_id)
     if request.method == "POST":
@@ -100,7 +102,6 @@ def build_exec(request, build_id):
 @admin_page
 def build_action(request, build_id):
     """Capture / discard a build, with the shared confirm flow."""
-    from .models import MachineBuild
 
     build = get_object_or_404(MachineBuild, pk=build_id)
     if request.method != "POST":
@@ -123,7 +124,6 @@ def build_action(request, build_id):
 @admin_page
 def build_console(request, build_id):
     """Guacamole grant for the build guest's VNC (attacker-role builds)."""
-    from .models import MachineBuild
 
     build = get_object_or_404(MachineBuild.objects.select_related("host"), pk=build_id)
     try:
