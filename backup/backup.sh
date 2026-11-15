@@ -38,6 +38,20 @@ exec > >(tee -a "$BACKUP_LOG") 2>&1
 log()  { echo "==> [$(date '+%Y-%m-%d %H:%M:%S')] $*"; }
 fail() { log "FATAL: $*"; exit 1; }
 
+# §23 owner decision (2026-11-14): operational warnings go through the
+# on-platform notification system. On any nonzero exit, try to leave an
+# admin notification; when the stack itself is down, the log is all there is.
+alert_failure() {
+  status=$?
+  [[ $status -eq 0 ]] && return 0
+  log "Attempting on-platform admin notification for the failure"
+  docker compose exec -T app python manage.py notify_admins \
+    "Nightly backup FAILED (exit $status). Details in backups/backup.log on the controller." \
+    >/dev/null 2>&1 || log "(on-platform notification could not be delivered — stack down? check the log on the host)"
+  exit $status
+}
+trap alert_failure EXIT
+
 [[ -f compose.yaml ]] || fail "compose.yaml not found (run from the repo root)"
 docker compose ps --status running >/dev/null 2>&1 \
   || fail "docker compose stack is not running (docker compose up -d db first)"

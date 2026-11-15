@@ -1,6 +1,8 @@
 """Operator service and page-flow tests (approvals, hints, content, manage pages)."""
+import io
 import uuid
 
+from django.core.management.base import CommandError
 from django.test import TestCase, override_settings
 
 from portal.apps.accounts.models import ApprovalDecision, User
@@ -83,6 +85,46 @@ class OperatorServiceTests(TestCase):
             adminops.preapprove(self.admin, "abc")  # non-numeric
         with self.assertRaises(ServiceError):
             adminops.preapprove(self.admin, "123")  # too short
+
+    def test_grant_admin_recovery_command(self):
+        from django.core.management import call_command
+
+        # Existing account: admin flag restored, approval untouched.
+        call_command("grant_admin", self.user.discord_id)
+        self.user.refresh_from_db()
+        self.assertTrue(self.user.is_admin)
+
+        # Lost identity: the replacement Discord ID gets a pre-approved
+        # account, ledger records the recovery, output reports it.
+        out = io.StringIO()
+        call_command("grant_admin", "499999999999999001", stdout=out)
+        recovered = User.objects.get(discord_id="499999999999999001")
+        self.assertTrue(recovered.is_admin)
+        self.assertEqual(recovered.status, User.Status.APPROVED)
+        self.assertTrue(ApprovalDecision.objects.filter(
+            discord_id=recovered.discord_id, note__icontains="recovery").exists())
+
+        # A suspended admin can be restored through the same command.
+        adminops.suspend_user(self.admin, self.user.id)
+        call_command("grant_admin", self.user.discord_id)
+        self.user.refresh_from_db()
+        self.assertEqual(self.user.status, User.Status.APPROVED)
+        self.assertTrue(self.user.is_admin)
+
+        with self.assertRaises(CommandError):
+            call_command("grant_admin", "abc")
+
+    def test_notify_admins_creates_inbox_alerts(self):
+        from django.core.management import call_command
+
+        call_command("notify_admins", "Drill: backup failure path")
+        self.assertTrue(Notification.objects.filter(
+            recipient=self.admin, message__icontains="Drill: backup failure path").exists())
+        self.assertFalse(Notification.objects.filter(recipient=self.user).exists())  # non-admins untouched
+        Notification.objects.all().delete()
+        User.objects.filter(pk=self.admin.id).update(is_admin=False)
+        with self.assertRaises(CommandError):
+            call_command("notify_admins", "x")  # no admins left to notify
 
     def test_hint_price_preview_and_retroactive_apply(self):
         hint = Hint.objects.create(challenge_id=self._challenge().id, description="d", text="t", cost=20)

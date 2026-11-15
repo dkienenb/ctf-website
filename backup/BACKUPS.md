@@ -31,13 +31,15 @@ Manual run: `backup/backup.sh` (idempotent; safe to run any time).
 
 ## Alerts / response process
 
-Log-file-only for now: `backup/backup.log` + a nonzero exit status. The
-daily response check is:
+Owner decision (§23, 2026-11-14): operational warnings arrive as **on-platform
+admin notifications** (in-app inbox), not a webhook. `backup.sh` delivers one
+automatically on any failure via `manage.py notify_admins` (when the stack
+itself is down, only the log is available — that's the first thing to check).
+The daily response check is:
 
-```bash
-tail -n 20 backups/backup.log         # last run summary ("BACKUP OK")
-systemctl status ctf-backup.service   # timer fired + exited 0
-```
+1. Admin notification inbox (an alert lands there on any backup failure),
+2. `tail -n 20 backups/backup.log` — last run summary ("BACKUP OK"),
+3. `systemctl status ctf-backup.service` — timer fired and exited 0.
 
 If `WORKHORSE_SSH_TARGETS` is empty the run **warns loudly** and skips
 template sync — templates are owner-supplied launch content; either fill in
