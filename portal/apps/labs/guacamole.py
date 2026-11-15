@@ -86,4 +86,8 @@ def issue_grant(user, lab, *, vnc_port=None):
     }
     key = _json_secret()
     data = base64.b64encode(_sign_and_encrypt(json.dumps(payload).encode(), key)).decode()
-    return f"{GUAC_ORIGIN}?data={quote(data)}"
+    # Deep-link into the client for this connection; the SPA consumes the
+    # `data` parameter on any route and resolves the connection across the
+    # user's data sources.
+    connection_id = f"lab-{lab.id}"
+    return f"{GUAC_ORIGIN}?data={quote(data)}#/client/{connection_id}"
