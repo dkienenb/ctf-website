@@ -73,7 +73,11 @@ services:
       - guacd
     environment:
       WEBAPP_CONTEXT: ROOT
-      GUACD_HOSTNAME: guacd
+      # guacd routing is environment-wide in Guacamole 1.6.0 — per-connection
+      # guacd-hostname/guacd-port parameters in grants/connections are ignored.
+      # Default to the single installed workhorse's guacd (workhorse-02); the
+      # VNC hop then reaches the guest over that host's loopback.
+      GUACD_HOSTNAME: ${GUACD_HOSTNAME:-guacd}
       POSTGRESQL_HOSTNAME: db
       POSTGRESQL_DATABASE: guacamole_db
       POSTGRESQL_USER: guacamole

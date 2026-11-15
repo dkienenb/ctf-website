@@ -46,9 +46,9 @@ gunicorn/Django → PostgreSQL.
 ## Remaining
 
 - **WebSocket upgrade + long-lived desktop streaming** through this exact
-  path: gets its true test with the Guacamole integration. The binding-based
-  fetch preserves the request, but streaming behavior must be measured, not
-  assumed (§15 explicitly requires demonstration).
+  path: ✅ verified 2026-11-15 end-to-end over workers.dev — a real
+  click-through streamed the lab desktop in the browser. §15 is closed.
+  (Fixes that made it work are in `worker/DESKTOP-DEBUG.md`.)
 - Idle/reconnect behavior at lab expiry: tested with real desktop sessions.
 - Free-tier consumption under expected concurrency: measured at launch.
 

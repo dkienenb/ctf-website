@@ -57,12 +57,20 @@ def _sign_and_encrypt(payload_bytes, key):
     return encryptor.update(padded) + encryptor.finalize()
 
 
+def _client_url_identifier(connection_id):
+    """Build the SPA's 1.6.0 client-URL identifier for a connection."""
+    raw = f"{connection_id}\x00c\x00json".encode()
+    return base64.urlsafe_b64encode(raw).rstrip(b"=").decode()
+
+
 def issue_grant(user, lab, *, vnc_port=None):
     """A grant valid five minutes, permitting only this lab's attacker desktop.
 
-    Routes through the guacd instance co-located on the lab's workhorse
-    (per-connection guacd parameters), and reaches the guest's VNC over that
-    host's loopback. All destinations are server-derived from the lab record."""
+    The webapp's guacd dial target is set deployment-wide via GUACD_HOSTNAME
+    (compose: the guacd co-located on the lab's workhorse) — Guacamole 1.6.0
+    has no per-connection guacd routing, so no guacd parameters are sent
+    here. That guacd reaches the guest's VNC over the workhorse's loopback.
+    All destinations are server-derived from the lab record."""
     if not lab.host or not lab.host.management_ip:
         raise GrantError("The lab's workhorse has not reported its management address yet.")
     vnc_host = "127.0.0.1"
@@ -77,9 +85,6 @@ def issue_grant(user, lab, *, vnc_port=None):
                 "parameters": {
                     "hostname": vnc_host,
                     "port": vnc_port,
-                    "guacd-hostname": lab.host.management_ip,
-                    "guacd-port": "4822",
-                    "guacd-encryption": "",
                 },
             }
         },
@@ -88,7 +93,13 @@ def issue_grant(user, lab, *, vnc_port=None):
     data = base64.b64encode(_sign_and_encrypt(json.dumps(payload).encode(), key)).decode()
     # Deep-link into the client for this connection. The SPA consumes the
     # `data` parameter from WITHIN the URL fragment (Angular hashbang
-    # routing), and client URLs address connections as
-    # <dataSource>.<connectionId>.
+    # routing). As of Guacamole 1.6.0, client URLs address connections via a
+    # base64url-encoded identifier of the form "<id>\0<type>\0<dataSource>"
+    # (type "c" = connection) — see ClientIdentifier.toString in the SPA
+    # (app/navigation/types/ClientIdentifier.js). The older flat
+    # "<dataSource>.<connectionId>" form decodes into garbage and the webapp
+    # kills the tunnel with "Illegal identifier - unknown type" before it
+    # ever dials guacd.
     connection_id = f"lab-{lab.id}"
-    return f"{GUAC_ORIGIN}#/client/json.{connection_id}?data={quote(data)}"
+    fragment_id = _client_url_identifier(connection_id)
+    return f"{GUAC_ORIGIN}#/client/{fragment_id}?data={quote(data)}"

@@ -1,8 +1,51 @@
 # Desktop streaming — current state and debugging handoff
 
-Written 2026-11-15 for continuation in a fresh conversation. Read this first:
-the ONLY broken piece is the last hop of the browser-desktop flow. Everything
-else in the platform is built, deployed, and verified.
+Updated 2026-11-15 (later in the day) after debugging. The three root
+causes of the "internal error" were all found and fixed; the desktop now
+**streams end-to-end over workers.dev** (verified both via a scripted
+WebSocket tunnel through Caddy and a real browser click-through on
+2026-11-15 — §15 is fully closed). Read the
+"Root causes" section first; the original writeup below is kept for
+context. Remaining: a human click-through over workers.dev to close §15.
+
+## Root causes (all fixed 2026-11-15)
+
+1. **Client-URL identifier format changed in Guacamole 1.6.0.** The deep
+   link used `#/client/json.lab-1` (the pre-1.6 `<dataSource>.<id>` form).
+   The 1.6.0 SPA (`ClientIdentifier.toString`) expects the fragment to be
+   base64url of `id\0type\0dataSource` with type `c`/`g`/`a`. The old form
+   decoded into garbage → `GUAC_TYPE` unknown → tunnel creation failed with
+   "Illegal identifier - unknown type" BEFORE dialing guacd. Fixed in
+   `portal/apps/labs/guacamole.py` (`_client_url_identifier`): emits
+   `bGFiLTEAYwBqc29u` (= `lab-1\0c\0json`).
+2. **Per-connection guacd routing does not exist in Guacamole 1.6.0.**
+   `guacd-hostname`/`guacd-port`/`guacd-encryption` in connection
+   parameters are silently ignored (confirmed at bytecode level in the
+   deployed WAR; guacd routing is environment-wide only:
+   `GUACD_HOSTNAME`/`GUACD_PORT`/`GUACD_SSL`). The webapp was dialing the
+   compose-local `guacd:4822`. Fixed: `compose.yaml` sets
+   `GUACD_HOSTNAME=${GUACD_HOSTNAME:-guacd}`, `.env` pins it to
+   `172.20.201.175` (workhorse-02's guacd). The inert parameters were
+   removed from the grant. Re-introducing per-lab routing means more than
+   one workhorse will require a custom AuthProvider/extension — plan for
+   that, don't rely on connection parameters.
+3. **Workhorse guacd container could not reach the guest VNC.** guacd ran
+   as a bridge-network Docker container, but libvirt binds the guest VNC
+   to the HOST's loopback (`127.0.0.1:5901`); inside the container that
+   address is the container's own loopback → Guacamole error 519
+   (UPSTREAM_NOT_FOUND). Fixed on workhorse-02 by re-running guacd with
+   `--network host`; `agent/guacd-install.sh` now does this by default.
+
+## Verification procedure used (no browser needed)
+
+Mint a grant with the repo's own crypto (see `guacamole.py`), POST it to
+`/guacamole/api/tokens`, then open
+`wss://<caddy>/guacamole/websocket-tunnel?token=<authToken>&GUAC_DATA_SOURCE=json&GUAC_ID=lab-1&GUAC_TYPE=c&GUAC_WIDTH=1024&GUAC_HEIGHT=768&GUAC_DPI=96`.
+Success = a tunnel UUID line `0.,36.<uuid>;` followed by `size`/`img`/
+`blob`/`rect` drawing instructions. This exercises webapp→Caddy→guacd→VNC;
+only the Discord login + Cloudflare Worker hop needs a human.
+
+# Original writeup (2026-11-15, morning) — kept for context
 
 ## The single remaining problem
 
