@@ -18,29 +18,7 @@ from portal.apps.submissions.models import HintRedemption, Solve, Submission
 from portal.apps.submissions.services import ServiceError
 
 
-def make_user(discord_id, name, status=User.Status.APPROVED, is_admin=False):
-    user = User.objects.create_user(discord_id, name)
-    user.status = status
-    user.is_admin = is_admin
-    user.save()
-    return user
-
-
-def make_question(answers, points=100, pools=(), user=None):
-    import uuid as uuid_lib
-
-    challenge = Challenge.objects.create(
-        title=f"Challenge {Question.objects.count()}",
-        slug=f"challenge-{uuid_lib.uuid4().hex[:10]}",
-        lifecycle=Challenge.Lifecycle.PUBLISHED,
-    )
-    for pool_name in pools:
-        pool, _ = Pool.objects.get_or_create(name=pool_name, defaults={"slug": pool_name.lower()})
-        PoolChallenge.objects.create(pool=pool, challenge=challenge)
-    question = Question.objects.create(challenge=challenge, prompt="Prompt", points=points)
-    for answer in answers:
-        AcceptedAnswer.objects.create(question=question, value=answer)
-    return question
+from portal.apps.testutils import make_user, make_question
 
 
 @override_settings(SUBMISSION_COOLDOWN_SECONDS=0)

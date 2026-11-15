@@ -210,9 +210,9 @@ class LibvirtExecutor:
             shutil.rmtree(staging, ignore_errors=True)
             raise AgentError("staging holds more parts than the transfer declared")
 
-        target_dir = self.template_dir(role, version)
-        target_dir.mkdir(parents=True, exist_ok=True)
-        incoming = target_dir / f".incoming-{file_name}"
+        # Reassemble and verify in the staging area; the template directory
+        # is touched only after the hash proves the content (§13).
+        incoming = staging / "assembled"
         hasher = hashlib.sha256()
         with incoming.open("wb") as out:
             for part in parts:
@@ -222,11 +222,13 @@ class LibvirtExecutor:
                     for block in iter(lambda: src.read(1024 * 1024), b""):
                         hasher.update(block)
         if hasher.hexdigest() != sha:
-            incoming.unlink(missing_ok=True)
             shutil.rmtree(staging, ignore_errors=True)
             raise AgentError("reassembled template failed sha256 verification")
-        os.replace(incoming, target_dir / file_name)
         total_bytes = sum(part.stat().st_size for part in parts)
+        target_dir = self.template_dir(role, version)
+        target_dir.mkdir(parents=True, exist_ok=True)
+        destination = target_dir / file_name
+        os.replace(incoming, destination)
         shutil.rmtree(staging, ignore_errors=True)
         return {"staged": f"{role}/{version}/{file_name}", "complete": True, "bytes": total_bytes}
 

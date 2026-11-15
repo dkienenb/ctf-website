@@ -15,7 +15,7 @@ from portal.apps.submissions.models import (
 )
 from portal.apps.submissions.services import ServiceError
 
-from .tests import make_question, make_user
+from portal.apps.testutils import make_question, make_user
 
 
 @override_settings(SUBMISSION_COOLDOWN_SECONDS=0)
@@ -186,7 +186,8 @@ class OperatorServiceTests(TestCase):
         self.assertEqual(error.exception.status, 409)
 
         preview = adminops.preview_hint_edit(hint, cost=80, description="d", text="t")
-        adminops.apply_hint_edit(self.admin, hint, cost=80, description="d", text="t", expected_revision=preview["revision"])
+        adminops.apply_hint_edit(self.admin, hint, cost=80, description="d", text="t",
+                                 reason="repricing", expected_revision=preview["revision"])
         self.assertEqual(services.summary(self.user)["points"], base - 60)
         self.assertTrue(Notification.objects.filter(recipient=self.user, message__icontains="price changed").exists())
         self.assertTrue(AuditEvent.objects.filter(operation="hint-edit").exists())

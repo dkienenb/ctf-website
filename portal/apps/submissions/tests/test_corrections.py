@@ -7,7 +7,7 @@ from portal.apps.submissions import corrections, services
 from portal.apps.submissions.models import AuditEvent, DataRevision, Notification, Solve, Submission
 from portal.apps.submissions.services import ServiceError
 
-from .tests import make_question, make_user
+from portal.apps.testutils import make_question, make_user
 
 
 def _edit(question, answers, mode="none", points=None, expected_revision=None, reason="test correction"):

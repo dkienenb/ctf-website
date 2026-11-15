@@ -10,7 +10,7 @@ from portal.apps.accounts.models import User
 from portal.apps.content.models import Attachment, Challenge, Pool, PoolChallenge, Question, AcceptedAnswer, Hint
 from portal.apps.submissions.models import Solve
 
-from .tests import make_question, make_user  # reuse helpers
+from portal.apps.testutils import make_question, make_user  # reuse helpers
 
 
 @override_settings(SUBMISSION_COOLDOWN_SECONDS=0)

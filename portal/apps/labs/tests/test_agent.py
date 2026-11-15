@@ -12,8 +12,8 @@ from agent import agent as workhorse_agent  # repo-root agent package
 from portal.apps.labs.models import Host, HostCommand, LabInstance, LabTemplate
 from portal.apps.labs.services import ServiceError
 
-from portal.apps.submissions.tests import make_user
-from portal.apps.labs.tests import make_lab_challenge, make_host
+from portal.apps.testutils import make_user
+from portal.apps.testutils import make_host, make_lab_challenge
 
 
 class AgentApiTests(TestCase):

@@ -1,6 +1,7 @@
 """Ports of the prototype lab rule tests against the production services
 (handoff §11, §13, §18) including the durable host-command flow."""
 import threading
+from django.db import IntegrityError
 from datetime import timedelta
 
 from django.test import TestCase, TransactionTestCase, override_settings
@@ -13,40 +14,7 @@ from portal.apps.labs.models import Host, HostCommand, LabInstance, LabTemplate,
 from portal.apps.submissions.models import Notification
 from portal.apps.submissions.services import ServiceError
 
-from portal.apps.submissions.tests import make_user
-
-
-def make_lab_challenge():
-    template = LabTemplate.objects.create(attacker_version="kali-v1", target_version="target-v1")
-    challenge = Challenge.objects.create(
-        title=f"Lab {template.id}",
-        slug=f"lab-{template.id}",
-        lifecycle=Challenge.Lifecycle.PUBLISHED,
-        lab_template=template,
-    )
-    return challenge
-
-
-def make_host(name="workhorse-01"):
-    host, _ = Host.objects.get_or_create(name=name)
-    host.online = True
-    host.total_disk_gb = 100
-    host.free_disk_gb = 80
-    host.total_ram_gb = 32
-    host.free_ram_gb = 26
-    host.last_heartbeat = timezone.now()
-    host.save()
-    return host
-
-
-def complete(host, operation_hint=None, status="ok"):
-    """Complete the oldest pending command for the host (agent simulation)."""
-    pending = HostCommand.objects.filter(host=host, status=HostCommand.Status.PENDING).order_by("id").first()
-    assert pending is not None, f"no pending command (wanted {operation_hint})"
-    if operation_hint:
-        assert pending.operation == operation_hint, f"expected {operation_hint}, got {pending.operation}"
-    services.complete_command(host, pending.op_id, status, {})
-    return pending
+from portal.apps.testutils import complete, make_host, make_lab_challenge, make_user
 
 
 class LabRuleTests(TestCase):
@@ -244,6 +212,10 @@ class LabConcurrencyTests(TransactionTestCase):
                 successes.append(services.request_lab(user, challenges[index].id))
             except ServiceError as error:
                 errors.append(error.message)
+            except IntegrityError:
+                # The uniq_outstanding_request constraint is the designed
+                # backstop for the same-user race; a clean refusal.
+                errors.append("duplicate outstanding request refused")
             finally:
                 from django.db import connections
 

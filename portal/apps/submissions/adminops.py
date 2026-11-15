@@ -130,6 +130,11 @@ def _validate_hint_edit(cost, description, text):
         raise ServiceError("Protected hint text is required.")
 
 
+def _validate_reason(reason):
+    if not isinstance(reason, str) or not reason.strip():
+        raise ServiceError("An audit reason is required.")
+
+
 def preview_hint_edit(hint, *, cost, description, text):
     _validate_hint_edit(cost, description, text)
     redemptions = list(HintRedemption.objects.filter(hint=hint))
@@ -153,11 +158,10 @@ def preview_hint_edit(hint, *, cost, description, text):
 
 def apply_hint_edit(actor, hint, *, cost, description, text, reason="", expected_revision):
     _assert_admin(actor)
-    _validate_hint_edit(cost, description, text)
     if DataRevision.current() != expected_revision:
         raise ServiceError("Data changed since the preview. Preview the change again.", 409)
-    if not isinstance(reason, str):
-        raise ServiceError("An audit reason is required.")
+    _validate_hint_edit(cost, description, text)
+    _validate_reason(reason)
     with transaction_atomic():
         before = {"cost": hint.cost, "description": hint.description}
         hint.cost = cost
@@ -304,6 +308,10 @@ def delete_draft(actor, challenge_id):
         raise ServiceError("Only drafts can be deleted. Archive published challenges instead.", 409)
     if Submission.objects.filter(question__challenge=challenge).exists():
         raise ServiceError("This draft has submission history and cannot be deleted.", 409)
+    # Redeemed hints are never deletable (owner decision §9): refusal, not a
+    # database ProtectedError, is the operator-facing behavior.
+    if HintRedemption.objects.filter(hint__challenge=challenge).exists():
+        raise ServiceError("A hint of this draft has redemptions; refund them before deleting.", 409)
     Hint.objects.filter(challenge=challenge).delete()
     Question.objects.filter(challenge=challenge).delete()
     PoolChallenge.objects.filter(challenge=challenge).delete()

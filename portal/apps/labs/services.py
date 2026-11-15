@@ -64,8 +64,13 @@ def _free_capacity(host):
 
 
 def _promote():
-    """Promote the oldest queued request when a host has a free slot."""
-    for host in _admitting_hosts():
+    """Promote the oldest queued request when a host has a free slot.
+
+    The host row is locked for the duration: two concurrent promotes must
+    serialize on it, or both would observe free capacity and double-book
+    the last slot (caught by the concurrency test)."""
+    for host_id in [host.id for host in _admitting_hosts()]:
+        host = Host.objects.select_for_update().get(pk=host_id)
         if not _free_capacity(host):
             continue
         entry = (
@@ -114,7 +119,10 @@ def request_lab(user, challenge_id):
     """Enqueue a lab request; may promote immediately when capacity exists."""
     _assert_approved(user)
     with transaction.atomic():
-        challenge = Challenge.objects.get(pk=challenge_id)
+        try:
+            challenge = Challenge.objects.get(pk=challenge_id)
+        except Challenge.DoesNotExist:
+            raise ServiceError("Challenge not found.", 404)
         _visible(challenge)
         if not _admitting_hosts():
             raise ServiceError("Workhorse unavailable. Saved state is retained; retry when it returns.", 503)
@@ -149,7 +157,9 @@ def claim(user, challenge_id):
     only when the agent reports both guests ready."""
     _assert_approved(user)
     with transaction.atomic():
-        lab = LabInstance.objects.select_for_update().get(user=user, challenge_id=challenge_id)
+        lab = LabInstance.objects.select_for_update().filter(user=user, challenge_id=challenge_id).first()
+        if lab is None:
+            raise ServiceError("No lab exists for this challenge yet.", 404)
         entry = (
             QueueEntry.objects.filter(user=user, challenge=lab.challenge, active=False, claimed_at__isnull=False)
             .order_by("-id")
@@ -182,7 +192,9 @@ def claim(user, challenge_id):
 def refresh(user, challenge_id):
     _assert_approved(user)
     with transaction.atomic():
-        lab = LabInstance.objects.select_for_update().get(user=user, challenge_id=challenge_id)
+        lab = LabInstance.objects.select_for_update().filter(user=user, challenge_id=challenge_id).first()
+        if lab is None:
+            raise ServiceError("No lab exists for this challenge yet.", 404)
         lease = lab.leases.filter(active=True).order_by("-id").first()
         if lab.state != "running" or lease is None:
             raise ServiceError("Lab is not running.", 409)
@@ -202,7 +214,9 @@ def refresh(user, challenge_id):
 def release(user, challenge_id):
     _assert_approved(user)
     with transaction.atomic():
-        lab = LabInstance.objects.select_for_update().get(user=user, challenge_id=challenge_id)
+        lab = LabInstance.objects.select_for_update().filter(user=user, challenge_id=challenge_id).first()
+        if lab is None:
+            raise ServiceError("No lab exists for this challenge yet.", 404)
         if lab.state == "reserved":
             _save_lab_locally(lab, "Both simulated guests saved. Capacity released.")
             _promote()

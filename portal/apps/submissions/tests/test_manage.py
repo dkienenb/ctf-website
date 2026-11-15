@@ -10,7 +10,7 @@ from portal.apps.content.models import Hint
 from portal.apps.submissions import services
 from portal.apps.submissions.models import DataRevision, Solve
 
-from .tests import make_question, make_user
+from portal.apps.testutils import make_question, make_user
 
 
 @override_settings(SUBMISSION_COOLDOWN_SECONDS=0)
