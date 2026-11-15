@@ -10,7 +10,21 @@ if [ "$(id -u)" -ne 0 ]; then
 fi
 
 DISKS=/var/lib/libvirt/images/ctf/disks
-OVERLAY="$DISKS/ctf-lab1-atk.qcow2"
+DOMAIN="ctf-lab1-atk"
+OVERLAY="$(virsh --connect qemu:///system domblklist "$DOMAIN" --details 2>/dev/null \
+  | awk '$2=="file" {print $NF}' | head -1)"
+
+echo "==> (0) Running domain's actual disks:"
+virsh --connect qemu:///system domblklist "$DOMAIN" --details 2>/dev/null || echo "  (domain not running)"
+echo "    using: ${OVERLAY:-none found}"
+
+if [ -z "$OVERLAY" ] || [ ! -f "$OVERLAY" ]; then
+  echo
+  echo "The running lab's disk file is MISSING (unlinked while in use)."
+  echo "Fix: administrative reset (portal /manage/ -> Reset both), then a fresh"
+  echo "claim; afterwards re-run this script if save still misbehaves."
+  exit 0
+fi
 
 echo "==> (1) Image info: the failing overlay and its backing chain"
 qemu-img info "$OVERLAY" 2>&1 | head -12 || echo "overlay missing — is a lab running?"
