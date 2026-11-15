@@ -293,6 +293,7 @@ def action(request):
 def _confirm_text(action, target):
     texts = {
         "suspend": ("Suspend this account?", "Immediately revoke desktop access, cancel its queued request, and save its active lab. Progress and ownership are retained."),
+        "reinstate": ("Reinstate this account?", "Desktop access is restored and the saved lab can be resumed. Progress and ownership were retained throughout."),
         "reject": ("Reject this application?", "The pending account is marked rejected. The user can sign in again to reapply; nothing is erased."),
         "refund": ("Refund this hint redemption?", "The ownership record is removed and the current price is returned to the user's score. This is audited; the user may redeem the hint again."),
         "delete-hint": ("Delete this hint?", "Only hints with no redemptions can be deleted. Redeemed hints must be refunded first."),
@@ -309,6 +310,7 @@ def _confirm_text(action, target):
 def _success_text(action):
     return {
         "suspend": "Account suspended.",
+        "reinstate": "Account reinstated.",
         "reject": "Application rejected.",
         "refund": "Hint redemption refunded.",
         "delete-hint": "Hint deleted.",
@@ -328,6 +330,8 @@ def _perform_action(actor, action, target):
         adminops.reject_user(actor, int(target))
     elif action == "suspend":
         adminops.suspend_user(actor, int(target))
+    elif action == "reinstate":
+        adminops.reinstate_user(actor, int(target))
     elif action == "preapprove":
         adminops.preapprove(actor, target)
     elif action == "refund":

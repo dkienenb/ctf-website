@@ -26,6 +26,9 @@
         {% if account.status != 'suspended' and account.id != user.id %}
           <form method="post" action="{% url 'manage-action' %}">{% csrf_token %}<input type="hidden" name="action" value="suspend"><input type="hidden" name="target" value="{{ account.id }}"><button class="btn small danger" type="submit">Suspend</button></form>
         {% endif %}
+        {% if account.status == 'suspended' %}
+          <form method="post" action="{% url 'manage-action' %}">{% csrf_token %}<input type="hidden" name="action" value="reinstate"><input type="hidden" name="target" value="{{ account.id }}"><button class="btn small" type="submit">Reinstate</button></form>
+        {% endif %}
       </div>
     </div>
   {% endfor %}

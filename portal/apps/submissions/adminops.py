@@ -90,6 +90,27 @@ def suspend_user(actor, user_id):
     DataRevision.bump()
 
 
+def reinstate_user(actor, user_id):
+    """Unsuspend: restore approval; progress, ownership, and the saved lab are
+    retained (the user resumes it through the normal flow)."""
+    _assert_admin(actor)
+    try:
+        target = User.objects.get(pk=user_id)
+    except User.DoesNotExist:
+        raise ServiceError("Account not found.", 404)
+    if target.status != User.Status.SUSPENDED:
+        raise ServiceError("Only suspended accounts can be reinstated.", 409)
+    target.status = User.Status.APPROVED
+    target.save(update_fields=("status", "updated_at"))
+    ApprovalDecision.objects.create(discord_id=target.discord_id, decision="reinstate", actor=actor)
+    Notification.objects.create(
+        recipient=target,
+        message="Your account was reinstated. Desktop access is available again; your saved lab and progress are intact.",
+    )
+    _audit(actor, "reinstate", "", {"user": target.id})
+    DataRevision.bump()
+
+
 def preapprove(actor, discord_id):
     _assert_admin(actor)
     if not isinstance(discord_id, str) or not discord_id.isdigit() or not 5 <= len(discord_id) <= 25:

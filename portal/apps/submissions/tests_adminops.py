@@ -34,6 +34,12 @@ class OperatorServiceTests(TestCase):
         self.assertEqual(self.user.status, User.Status.SUSPENDED)
         self.assertTrue(Notification.objects.filter(recipient=self.user, message__icontains="suspended").exists())
 
+        adminops.reinstate_user(self.admin, self.user.id)
+        self.user.refresh_from_db()
+        self.assertEqual(self.user.status, User.Status.APPROVED)
+        self.assertTrue(ApprovalDecision.objects.filter(discord_id=self.user.discord_id, decision="reinstate").exists())
+        self.assertTrue(Notification.objects.filter(recipient=self.user, message__icontains="reinstated").exists())
+
         # Rejection requires a pending account (owner decision: reject + reapply).
         User.objects.filter(pk=self.user.id).update(status=User.Status.PENDING)
         adminops.reject_user(self.admin, self.user.id)
@@ -55,6 +61,19 @@ class OperatorServiceTests(TestCase):
         self.assertFalse(QueueEntry.objects.filter(user=self.user, active=True).exists())
         with self.assertRaises(ServiceError):
             adminops.suspend_user(self.admin, self.admin.id)  # cannot self-suspend
+
+    def test_reinstate_requires_suspended_and_keeps_saved_lab(self):
+        with self.assertRaises(ServiceError) as error:
+            adminops.reinstate_user(self.admin, self.user.id)  # approved, not suspended
+        self.assertEqual(error.exception.status, 409)
+        challenge = Challenge.objects.create(title="Lab challenge", slug="lab-challenge-2")
+        lab = LabInstance.objects.create(user=self.user, challenge=challenge, state="saved")
+        adminops.suspend_user(self.admin, self.user.id)
+        adminops.reinstate_user(self.admin, self.user.id)
+        self.user.refresh_from_db()
+        self.assertEqual(self.user.status, User.Status.APPROVED)
+        lab.refresh_from_db()
+        self.assertEqual(lab.state, "saved")  # saved lab untouched; the user resumes it normally
 
     def test_preapprove_upgrades_pending_without_account(self):
         adminops.preapprove(self.admin, "1234567890123")
