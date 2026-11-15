@@ -138,8 +138,12 @@ class PageFlowTests(TestCase):
         self.assertEqual(connection["protocol"], "vnc")
         self.assertEqual(connection["parameters"]["hostname"], "127.0.0.1")  # guest VNC: host-local
         self.assertEqual(connection["parameters"]["port"], "5901")           # 5900 + (lab.id % 1000)
-        self.assertEqual(connection["parameters"]["guacd-hostname"], "10.0.0.5")  # the lab's workhorse
-        self.assertEqual(connection["parameters"]["guacd-port"], "4822")
+        # Guacamole 1.6.0 ignores per-connection guacd parameters (verified at
+        # bytecode level — see worker/DESKTOP-DEBUG.md root cause 2); the guacd
+        # destination is deployment-wide (GUACD_HOSTNAME on the guacamole
+        # container). Guard against re-adding inert parameters.
+        self.assertNotIn("guacd-hostname", connection["parameters"])
+        self.assertNotIn("guacd-port", connection["parameters"])
 
     def test_desktop_route_is_not_shadowed_by_lab_actions(self):
         """Regression: 'desktop' matched the <str:action> catch-all and its

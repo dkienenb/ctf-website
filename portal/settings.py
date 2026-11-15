@@ -159,6 +159,11 @@ ACCOUNT_USER_MODEL_USERNAME_FIELD = None
 # whose model has neither username nor email fields.
 ACCOUNT_LOGIN_METHODS = set()
 ACCOUNT_SIGNUP_FIELDS = ["password1*", "password2*"]
+# allauth's account.W001 cannot express this Discord-only configuration: it
+# fires whenever ACCOUNT_LOGIN_METHODS is empty, but empty is exactly right
+# here (identity is the Discord ID; the user model has neither username nor
+# email fields). This is a documented silence, not an oversight.
+SILENCED_SYSTEM_CHECKS = ["account.W001"]
 # No email on the user model: Discord identify scope supplies no address.
 # Routes under /accounts/ per allauth defaults; login is Discord-only.
 LOGIN_REDIRECT_URL = "/"

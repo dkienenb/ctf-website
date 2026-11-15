@@ -115,12 +115,19 @@ class AgentExecutorTests(TestCase):
             def __init__(self, inner):
                 self.calls = []
                 self.inner = inner
+                # Per-probe (returncode, stdout) responses; default (1, "") =
+                # "not defined / not active", which drives the define+start paths.
+                self.probes = {}
 
             def virsh(self, *args):
                 self.calls.append(args)
 
             def virsh_tolerant(self, *args):
                 self.calls.append(args)
+
+            def virsh_probe(self, *args):
+                self.calls.append(args)
+                return self.probes.get(args[0], (1, ""))
 
             def domain_exists(self, name):
                 return name in getattr(self, "existing", set())
@@ -230,6 +237,11 @@ class AgentExecutorTests(TestCase):
                 (directory / "domain.xml").write_text("<domain><name>@NAME@</name><disk>@DISK@</disk></domain>")
             executor.existing = {"ctf-lab9-atk"}
             executor.vnc_port_of = lambda name: "5900" if name in executor.existing else "unknown"
+            # dumpxml must report the attacker as already attached to lab 9's
+            # per-lab network, so the §13 preserve branch applies.
+            executor.probes["dumpxml"] = (
+                0, '<domain>\n  <source network="ctf-lab9-net"/>\n</domain>',
+            )
             command = {"op_id": "op-x", "operation": "allocate", "payload": {"lab": 9}, "lab": 9}
             detail = workhorse_agent.execute(executor, command)
             self.assertFalse(detail["resumed"])

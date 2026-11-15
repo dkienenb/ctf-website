@@ -101,6 +101,16 @@ class LibvirtExecutor:
             capture_output=True, text=True, timeout=60,
         )
 
+    def virsh_probe(self, *args):
+        """virsh probe that reports (returncode, stdout) instead of raising —
+        for net-info/dumpxml existence checks. Like every other virsh spawn,
+        overridable in tests (tests_agent's RecordingExecutor)."""
+        result = subprocess.run(
+            ["virsh", "--connect", self.uri, *args],
+            capture_output=True, text=True, timeout=60,
+        )
+        return result.returncode, result.stdout
+
     def domain_exists(self, name):
         result = subprocess.run(
             ["virsh", "--connect", self.uri, "dominfo", name],
@@ -136,11 +146,8 @@ class LibvirtExecutor:
         the agent never touches iptables (it runs without CAP_NET_ADMIN).
         """
         net = self.lab_net(lab_id)
-        result = subprocess.run(
-            ["virsh", "--connect", self.uri, "net-info", net["name"]],
-            capture_output=True, text=True, timeout=60,
-        )
-        if result.returncode == 0 and "Active:     yes" in result.stdout:
+        code, out = self.virsh_probe("net-info", net["name"])
+        if code == 0 and "Active:     yes" in out:
             return net
         xml = (
             "<network>\n"
@@ -156,7 +163,7 @@ class LibvirtExecutor:
         )
         xml_path = self.disks_dir / f"{net['name']}.xml"
         xml_path.write_text(xml)
-        if result.returncode != 0:
+        if code != 0:
             self.virsh("net-define", str(xml_path))
         self.virsh_tolerant("net-autostart", net["name"])
         self.virsh_tolerant("net-start", net["name"])
@@ -164,13 +171,10 @@ class LibvirtExecutor:
 
     def _domain_network(self, name):
         """Source network of a defined domain ('' when unknown)."""
-        result = subprocess.run(
-            ["virsh", "--connect", self.uri, "dumpxml", name],
-            capture_output=True, text=True, timeout=60,
-        )
-        if result.returncode != 0:
+        code, out = self.virsh_probe("dumpxml", name)
+        if code != 0:
             return ""
-        for line in result.stdout.splitlines():
+        for line in out.splitlines():
             line = line.strip()
             if line.startswith("<source network="):
                 return line.split('"')[1]
