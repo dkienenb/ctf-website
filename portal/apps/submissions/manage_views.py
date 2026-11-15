@@ -273,6 +273,65 @@ def content_edit(request, challenge_id):
     })
 
 
+class PoolForm(forms.Form):
+    name = forms.CharField(max_length=100, help_text="Shown to players in the challenge browser and navigation.")
+    description = forms.CharField(widget=forms.Textarea(attrs={"rows": 2}), required=False,
+                                  help_text="Shown at the top of the pool page. Optional.")
+    order = forms.IntegerField(min_value=0, initial=0,
+                               help_text="Lower numbers appear first in the pool list.")
+
+
+@admin_page
+def pools(request):
+    form = PoolForm(request.POST or None)
+    if request.method == "POST":
+        if form.is_valid():
+            try:
+                adminops.create_pool(
+                    request.user,
+                    name=form.cleaned_data["name"],
+                    description=form.cleaned_data["description"],
+                    order=form.cleaned_data["order"],
+                )
+                messages.success(request, "Pool created.")
+                return redirect("manage-pools")
+            except adminops.ServiceError as error:
+                messages.error(request, error.message)
+        else:
+            messages.error(request, "Check the form fields.")
+    listing = [
+        {"pool": pool, "challenges": pool.memberships.count()}
+        for pool in Pool.objects.order_by("order", "id")
+    ]
+    return render(request, "manage/pools.html", {"listing": listing, "form": form})
+
+
+@admin_page
+def pool_edit(request, pool_id):
+    pool = get_object_or_404(Pool, pk=pool_id)
+    initial = {"name": pool.name, "description": pool.description, "order": pool.order}
+    form = PoolForm(request.POST or initial)
+    if request.method == "POST":
+        if form.is_valid():
+            try:
+                adminops.edit_pool(
+                    request.user, pool.id,
+                    name=form.cleaned_data["name"],
+                    description=form.cleaned_data["description"],
+                    order=form.cleaned_data["order"],
+                )
+                messages.success(request, "Pool updated. Its web address (slug) is unchanged, so old links keep working.")
+                return redirect("manage-pools")
+            except adminops.ServiceError as error:
+                messages.error(request, error.message)
+        else:
+            messages.error(request, "Check the form fields.")
+    return render(request, "manage/pool_edit.html", {
+        "pool": pool, "form": form,
+        "challenges": pool.memberships.count(),
+    })
+
+
 class AttachmentUploadForm(forms.Form):
     file = forms.FileField(allow_empty_file=False)
 
@@ -441,6 +500,7 @@ def _confirm_text(action, target):
         "recover": ("Simulate irrecoverable target loss?", "The affected target returns to its pinned template and the user is notified. Application progress is preserved."),
         "distribute-template": ("Distribute this machine image to every workhorse?", "The pinned domain.xml and base disk are staged through the durable command queue; retries are idempotent. Reset any running lab using this version first — replacing template files under running guests is not safe."),
         "delete-template": ("Delete this machine image?", "The artifact and its uploaded disk are removed. Deletion is refused while any challenge template still pins this version."),
+        "delete-pool": ("Delete this pool?", "The pool disappears from the challenge browser and its members lose this grouping. Challenges, scores, and progress are untouched."),
     }
     return texts.get(action, ("Confirm action?", "Apply this operator action?"))
 
@@ -460,6 +520,7 @@ def _success_text(action):
         "recover": "Recovery command issued.",
         "distribute-template": "Distribution queued.",
         "delete-template": "Machine image deleted.",
+        "delete-pool": "Pool deleted.",
     }.get(action, "Action applied.")
 
 
@@ -492,6 +553,8 @@ def _perform_action(actor, action, target):
         lab_services.distribute_machine_image(actor, int(target))
     elif action == "delete-template":
         lab_services.delete_machine_image(actor, int(target))
+    elif action == "delete-pool":
+        adminops.delete_pool(actor, int(target))
     else:
         raise adminops.ServiceError("Unknown administrator action.")
 

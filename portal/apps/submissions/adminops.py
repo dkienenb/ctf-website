@@ -273,9 +273,64 @@ def _unique_slug(title):
     from django.utils.text import slugify
     import uuid as uuid_lib
 
-    base = slugify(title)[:180] or "challenge"
+    base = slugify(title)[:180] or "pool"
     slug = f"{base}-{uuid_lib.uuid4().hex[:8]}"
     return slug
+
+
+def _validate_pool_fields(name, description, order):
+    if not isinstance(name, str) or not name.strip():
+        raise ServiceError("Pool name is required.")
+    if len(name.strip()) > 100:
+        raise ServiceError("Pool name is too long (100 characters max).")
+    if description is None:
+        description = ""
+    if not isinstance(description, str):
+        raise ServiceError("Description must be text.")
+    if isinstance(order, bool) or not isinstance(order, int) or order < 0:
+        raise ServiceError("Order must be a nonnegative integer.")
+    return name.strip(), description.strip(), order
+
+
+def create_pool(actor, *, name, description="", order=0):
+    _assert_admin(actor)
+    name, description, order = _validate_pool_fields(name, description, order)
+    if Pool.objects.filter(name__iexact=name).exists():
+        raise ServiceError("A pool with that name already exists.", 409)
+    pool = Pool.objects.create(name=name, slug=_unique_slug(name), description=description, order=order)
+    _audit(actor, "pool-create", "", {"pool": pool.id, "name": name})
+    DataRevision.bump()
+    return pool
+
+
+def edit_pool(actor, pool_id, *, name, description="", order=0):
+    _assert_admin(actor)
+    try:
+        pool = Pool.objects.get(pk=pool_id)
+    except Pool.DoesNotExist:
+        raise ServiceError("Pool not found.", 404)
+    name, description, order = _validate_pool_fields(name, description, order)
+    if Pool.objects.filter(name__iexact=name).exclude(pk=pool.id).exists():
+        raise ServiceError("A pool with that name already exists.", 409)
+    pool.name = name
+    pool.description = description
+    pool.order = order
+    pool.save(update_fields=("name", "description", "order"))
+    _audit(actor, "pool-edit", "", {"pool": pool.id, "name": name})
+    DataRevision.bump()
+    return pool
+
+
+def delete_pool(actor, pool_id):
+    _assert_admin(actor)
+    try:
+        pool = Pool.objects.get(pk=pool_id)
+    except Pool.DoesNotExist:
+        raise ServiceError("Pool not found.", 404)
+    name, pool_id_value = pool.name, pool.id
+    pool.delete()  # cascades memberships only; challenges and scores are untouched
+    _audit(actor, "pool-delete", "", {"pool": pool_id_value, "name": name})
+    DataRevision.bump()
 
 
 def edit_content(actor, challenge, *, title, summary, description, pool_ids, expected_revision,

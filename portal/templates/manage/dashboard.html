@@ -86,7 +86,10 @@
 
 <section class="panel">
   <h2>Content publishing</h2>
-  <p><a class="btn primary" href="{% url 'manage-create-challenge' %}">New challenge</a></p>
+  <p>
+    <a class="btn primary" href="{% url 'manage-create-challenge' %}">New challenge</a>
+    <a class="btn secondary" href="{% url 'manage-pools' %}">Pools</a>
+  </p>
   {% for challenge in challenges %}
     <div class="row">
       <div><strong>{{ challenge.title }}</strong>

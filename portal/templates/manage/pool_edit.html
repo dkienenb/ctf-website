@@ -1,0 +1,28 @@
+{% extends "base.html" %}
+{% block title %}Edit pool — Administration{% endblock %}
+{% block content %}
+<p><a href="{% url 'manage-pools' %}">← Back to pools</a></p>
+<h1>Edit pool: {{ pool.name }}</h1>
+<p class="muted small">{{ challenges }} challenge{{ challenges|pluralize }} belong to this pool. Renaming keeps the pool's web address (slug, /{{ pool.slug }}/), so existing links keep working.</p>
+
+<section class="panel">
+  <form method="post" class="stack-form">
+    {% csrf_token %}
+    {% for field in form %}
+      <div class="field">
+        <label for="{{ field.id_for_label }}">{{ field.label }}</label>
+        {{ field }}
+        {% if field.help_text %}<span class="muted small">{{ field.help_text }}</span>{% endif %}
+        {% for error in field.errors %}<span class="error">{{ error }}</span>{% endfor %}
+      </div>
+    {% endfor %}
+    <button class="btn primary" type="submit">Save pool</button>
+  </form>
+</section>
+
+<section class="panel">
+  <h2>Danger zone</h2>
+  <form method="post" action="{% url 'manage-action' %}">{% csrf_token %}<input type="hidden" name="action" value="delete-pool"><input type="hidden" name="target" value="{{ pool.id }}"><button class="btn danger" type="submit">Delete this pool</button></form>
+  <p class="muted small">Deleting removes the grouping only — challenges, scores, and progress are untouched.</p>
+</section>
+{% endblock %}
