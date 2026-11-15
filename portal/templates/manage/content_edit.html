@@ -12,6 +12,15 @@
   </form>
 </section>
 <section class="panel">
+  <h2>Machine template</h2>
+  <p class="muted small">Pin which machine images this challenge's lab uses (see <a href="{% url 'manage-machine-images' %}">machine images</a>). Leave a version empty to use the workhorse's demo template. Existing labs keep their current template.</p>
+  <form method="post" action="{% url 'manage-lab-template' challenge.id %}">
+    {% csrf_token %}
+    {{ lab_template_form.as_p }}
+    <button class="btn secondary" type="submit">Pin template</button>
+  </form>
+</section>
+<section class="panel">
   <h2>Attachments</h2>
   {% for attachment in challenge.attachments.all %}
     <div class="row">

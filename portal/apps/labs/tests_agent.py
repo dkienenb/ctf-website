@@ -204,6 +204,91 @@ class AgentExecutorTests(TestCase):
             self.assertTrue(any("atk" in name for name in destroyed))
             self.assertTrue(any("tgt" in name for name in destroyed))
 
+    def test_allocate_uses_pinned_versions(self):
+        """Versions in the allocate payload select images_dir/<role>/<version>."""
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmp:
+            executor = self._executor(tmp)
+            for role, version in (("attacker", "kali-v9"), ("target", "target-v2")):
+                directory = executor.images_dir / role / version
+                directory.mkdir(parents=True)
+                (directory / "domain.xml").write_text("<domain><name>@NAME@</name><disk>@DISK@</disk><vnc>@VNC_PORT@</vnc><net>@LAB_NET@</net></domain>")
+            command = {"op_id": "abc123def456", "operation": "allocate",
+                       "payload": {"lab": 3, "attacker_version": "kali-v9", "target_version": "target-v2"}, "lab": 3}
+            detail = workhorse_agent.execute(executor, command)
+            self.assertEqual(detail["domains"], ["ctf-lab3-atk", "ctf-lab3-tgt"])
+            defines = [call for call in executor.calls if call[0] == "define"]
+            self.assertEqual(len(defines), 2)
+            xml = (executor.disks_dir / "ctf-lab3-atk.xml").read_text()
+            self.assertIn("ctf-lab3-net", xml)  # @LAB_NET@ substituted
+            # Missing pinned version fails explicitly (§13: no silent substitution).
+            command["payload"]["target_version"] = "absent-version"
+            with self.assertRaises(workhorse_agent.AgentError) as error:
+                workhorse_agent.execute(executor, command)
+            self.assertIn("missing pinned template", str(error.exception))
+
+    def test_template_put_chunks_assemble_and_verify(self):
+        import base64
+        import hashlib
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmp:
+            executor = self._executor(tmp)
+            content = b"x" * 5000 + b"y" * 3000
+            sha = hashlib.sha256(content).hexdigest()
+            chunks = [content[i:i + 4096] for i in range(0, len(content), 4096)]
+            for seq, chunk in enumerate(chunks, start=1):
+                detail = workhorse_agent.execute(executor, {
+                    "op_id": f"tpl-{seq}", "operation": "template-put",
+                    "payload": {"role": "target", "version": "v1", "file": "disk-template",
+                                "seq": seq, "total": len(chunks),
+                                "data_b64": base64.b64encode(chunk).decode("ascii"), "sha256": sha},
+                })
+                self.assertFalse(detail["complete"]) if seq < len(chunks) else self.assertTrue(detail["complete"])
+            disk = executor.images_dir / "target" / "v1" / "disk-template"
+            self.assertEqual(disk.read_bytes(), content)
+
+            # Corrupt reassembly is refused; bad names are refused for path safety.
+            with self.assertRaises(workhorse_agent.AgentError):
+                workhorse_agent.execute(executor, {
+                    "op_id": "tpl-verify", "operation": "template-verify",
+                    "payload": {"role": "target", "version": "v1",
+                                "sha256": "0" * 64, "size": len(content)},
+                })
+            with self.assertRaises(workhorse_agent.AgentError):
+                workhorse_agent.execute(executor, {
+                    "op_id": "tpl-evil", "operation": "template-put",
+                    "payload": {"role": "target", "version": "../evil", "file": "domain.xml",
+                                "seq": 1, "total": 1, "data_b64": "aGVsbG8=", "sha256": sha},
+                })
+            with self.assertRaises(workhorse_agent.AgentError):
+                workhorse_agent.execute(executor, {
+                    "op_id": "tpl-file", "operation": "template-put",
+                    "payload": {"role": "target", "version": "v1", "file": "authorized_keys",
+                                "seq": 1, "total": 1, "data_b64": "aGVsbG8=", "sha256": sha},
+                })
+
+    def test_template_list_and_remove(self):
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmp:
+            executor = self._executor(tmp)
+            version_dir = executor.images_dir / "attacker" / "kali-v1"
+            version_dir.mkdir(parents=True)
+            (version_dir / "domain.xml").write_text("<domain>")
+            (version_dir / "disk-template").write_bytes(b"disk")
+            inventory = workhorse_agent.execute(executor, {
+                "op_id": "tpl-list", "operation": "template-list", "payload": {},
+            })
+            self.assertEqual(inventory["attacker"]["kali-v1"], {"domain.xml": 8, "disk-template": 4})
+            detail = workhorse_agent.execute(executor, {
+                "op_id": "tpl-rm", "operation": "template-remove",
+                "payload": {"role": "attacker", "version": "kali-v1"},
+            })
+            self.assertEqual(detail["removed"], "attacker/kali-v1")
+            self.assertFalse(version_dir.exists())
+
     def test_same_lab_domain_identity_across_operations(self):
         """Allocate, save, and reset must address the SAME domain names (§12)."""
         import tempfile

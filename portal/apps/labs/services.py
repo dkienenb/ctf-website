@@ -18,6 +18,9 @@ Ports of the prototype's verified rules plus the production command flow:
   with a stale agent heartbeat. A stale heartbeat never assumes guests
   stopped (§18).
 """
+import base64
+import hashlib
+import re
 import secrets
 from datetime import timedelta
 
@@ -28,7 +31,7 @@ from portal.apps.accounts.models import User
 from portal.apps.content.models import Challenge
 from portal.apps.submissions.services import ServiceError
 
-from .models import Host, HostCommand, LabInstance, Lease, QueueEntry
+from .models import Host, HostCommand, LabInstance, LabTemplate, Lease, MachineImage, QueueEntry
 
 RESERVATION_SECONDS = 120
 LEASE_SECONDS = 1800
@@ -388,3 +391,198 @@ def set_host_online(actor, host_id, online):
         _promote()
     DataRevision.bump()
     return host
+
+
+# --- Machine template authoring (§10, §13) ------------------------------------
+
+DOMAIN_PLACEHOLDERS = ("@NAME@", "@DISK@", "@VNC_PORT@", "@LAB_NET@")
+_SAFE_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,79}$")
+STAGE_CHUNK_BYTES = 2 * 1024 * 1024
+
+
+def validate_domain_xml(domain_xml):
+    """A pinned template must carry every placeholder the agent substitutes."""
+    problems = [p for p in DOMAIN_PLACEHOLDERS if p not in domain_xml]
+    if problems:
+        raise ServiceError(
+            "domain.xml is missing required placeholders: " + ", ".join(problems), 400
+        )
+
+
+def validate_version(version):
+    """Version names become directory names on workhorses; keep them safe."""
+    if not _SAFE_NAME_RE.fullmatch(version or ""):
+        raise ServiceError(
+            "Version must start with a letter or digit and use only letters, digits, dots, dashes, underscores.", 400
+        )
+
+
+def save_machine_image(actor, *, role, version, domain_xml, notes="", disk=None):
+    """Create or replace a machine image artifact. Replacing the disk file
+    invalidates the recorded hash; re-distribute before relying on it (§13:
+    no silent substitution — the explicit distribute action is the pin)."""
+    from portal.apps.submissions.models import DataRevision
+
+    if actor is None or not getattr(actor, "is_admin", False):
+        raise ServiceError("Administrator access is required.", 403)
+    if role not in MachineImage.Role.values:
+        raise ServiceError("Role must be attacker or target.", 400)
+    validate_version(version)
+    validate_domain_xml(domain_xml or "")
+
+    with transaction.atomic():
+        image, created = MachineImage.objects.select_for_update().get_or_create(
+            role=role, version=version,
+            defaults={"domain_xml": domain_xml, "notes": notes, "uploaded_by": actor},
+        )
+        if not created:
+            image.domain_xml = domain_xml
+            if notes:
+                image.notes = notes
+        image.uploaded_by = actor
+        if disk is not None:
+            if image.disk_file:
+                image.disk_file.delete(save=False)
+            image.disk_file.save(f"{role}-{version}-disk-template", disk, save=False)
+            image.disk_file.open("rb")
+            hasher = hashlib.sha256()
+            for block in iter(lambda: image.disk_file.read(1024 * 1024), b""):
+                hasher.update(block)
+            image.disk_file.close()
+            image.disk_sha256 = hasher.hexdigest()
+            image.disk_size = image.disk_file.size
+        image.save()
+        DataRevision.bump()
+    return image, created
+
+
+def delete_machine_image(actor, image_id):
+    from portal.apps.submissions.models import DataRevision
+
+    if actor is None or not getattr(actor, "is_admin", False):
+        raise ServiceError("Administrator access is required.", 403)
+    try:
+        image = MachineImage.objects.get(pk=image_id)
+    except MachineImage.DoesNotExist:
+        raise ServiceError("Machine image not found.", 404)
+    referenced = (
+        LabTemplate.objects.filter(attacker_version=image.version).exists()
+        if image.role == MachineImage.Role.ATTACKER
+        else LabTemplate.objects.filter(target_version=image.version).exists()
+    )
+    if referenced:
+        raise ServiceError(
+            "This version is pinned by at least one challenge template. Unassign it first.", 409
+        )
+    if image.disk_file:
+        image.disk_file.delete(save=False)
+    image.delete()
+    DataRevision.bump()
+
+
+def distribute_machine_image(actor, image_id):
+    """Stage a pinned image onto every workhorse via the durable command
+    queue (chunked template-put commands; op ids derive from the content
+    hash so retries and re-distributions are idempotent)."""
+    from portal.apps.submissions.models import DataRevision
+
+    if actor is None or not getattr(actor, "is_admin", False):
+        raise ServiceError("Administrator access is required.", 403)
+    try:
+        image = MachineImage.objects.get(pk=image_id)
+    except MachineImage.DoesNotExist:
+        raise ServiceError("Machine image not found.", 404)
+    if not image.disk_file:
+        raise ServiceError("This image has no base disk uploaded yet.", 409)
+    hosts = list(Host.objects.all())
+    if not hosts:
+        raise ServiceError("No workhorses are registered.", 409)
+
+    image.disk_file.open("rb")
+    payload_hasher = hashlib.sha256()
+    chunks = []
+    while True:
+        block = image.disk_file.read(STAGE_CHUNK_BYTES)
+        if not block:
+            break
+        payload_hasher.update(block)
+        chunks.append(base64.b64encode(block).decode("ascii"))
+    image.disk_file.close()
+    staged_sha = payload_hasher.hexdigest()
+    if staged_sha != image.disk_sha256:
+        image.disk_sha256 = staged_sha
+        image.save(update_fields=("disk_sha256",))
+
+    xml_bytes = image.domain_xml.encode("utf-8")
+    issued = 0
+
+    def stage(host, op_id, operation, payload):
+        """Idempotent issue: existing FAILED commands return to pending so
+        a re-distribution retries them; COMPLETED ones are left alone."""
+        command, created = HostCommand.objects.get_or_create(
+            op_id=op_id, defaults={
+                "host": host, "operation": operation, "payload": payload,
+            },
+        )
+        if not created and command.status == HostCommand.Status.FAILED:
+            command.status = HostCommand.Status.PENDING
+            command.result = {}
+            command.save(update_fields=("status", "result", "updated_at"))
+        return command
+
+    for host in hosts:
+        blob = base64.b64encode(xml_bytes).decode("ascii")
+        stage(host, f"tpl-{staged_sha[:16]}-{host.id}-domain",
+              "template-put", {
+                  "role": image.role, "version": image.version,
+                  "file": "domain.xml", "seq": 1, "total": 1,
+                  "data_b64": blob, "sha256": staged_sha,
+              })
+        issued += 1
+        for seq, chunk in enumerate(chunks, start=1):
+            stage(host, f"tpl-{staged_sha[:16]}-{host.id}-disk-{seq}",
+                  "template-put", {
+                      "role": image.role, "version": image.version,
+                      "file": "disk-template", "seq": seq, "total": len(chunks),
+                      "data_b64": chunk, "sha256": staged_sha,
+                  })
+            issued += 1
+        stage(host, f"tpl-{staged_sha[:16]}-{host.id}-done",
+              "template-verify", {
+                  "role": image.role, "version": image.version,
+                  "sha256": staged_sha, "size": image.disk_size,
+              })
+        issued += 1
+    DataRevision.bump()
+    return {"message": f"Staging {image.role}/{image.version} to {len(hosts)} workhorse(s) ({issued} commands).",
+            "hosts": len(hosts), "commands": issued}
+
+
+def lab_template_save(actor, challenge_id, *, attacker_version, target_version,
+                      attacker_ram_mb, attacker_vcpu, attacker_disk_gb,
+                      target_ram_mb, target_vcpu, target_disk_gb):
+    """Bind a challenge to pinned template versions + sizing (§10)."""
+    from portal.apps.content.models import Challenge
+    from portal.apps.submissions.models import DataRevision
+
+    if actor is None or not getattr(actor, "is_admin", False):
+        raise ServiceError("Administrator access is required.", 403)
+    try:
+        challenge = Challenge.objects.get(pk=challenge_id)
+    except Challenge.DoesNotExist:
+        raise ServiceError("Challenge not found.", 404)
+    for role, version in (("attacker", attacker_version), ("target", target_version)):
+        if version and not MachineImage.objects.filter(role=role, version=version).exists():
+            raise ServiceError(f"No {role} machine image named '{version}'. Upload it first.", 400)
+    template, _ = LabTemplate.objects.get_or_create(challenge=challenge)
+    template.attacker_version = attacker_version or ""
+    template.target_version = target_version or ""
+    template.attacker_ram_mb = attacker_ram_mb
+    template.attacker_vcpu = attacker_vcpu
+    template.attacker_disk_gb = attacker_disk_gb
+    template.target_ram_mb = target_ram_mb
+    template.target_vcpu = target_vcpu
+    template.target_disk_gb = target_disk_gb
+    template.save()
+    DataRevision.bump()
+    return template

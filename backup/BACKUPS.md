@@ -12,6 +12,7 @@ Owner policy (2026-11-15): **local-only** destination for now, **daily** run,
 | PostgreSQL app DB (users, approvals, content, answers, submissions, solves, redemptions) | `pg_dump -Fc` via the compose `db` container | `BACKUP_DIR/db-<name>-<stamp>.dump` |
 | guacamole_db (connection records the grants point at) | `pg_dump -Fc` | `BACKUP_DIR/db-guacamole_db-<stamp>.dump` |
 | Challenge attachments | tar of the compose `attachments` volume | `BACKUP_DIR/attachments-<stamp>.tar.gz` |
+| Machine templates (operator-uploaded base images, `private_templates`) | tar of the compose `templates` volume | `BACKUP_DIR/templates-<stamp>.tar.gz` |
 | Pinned VM templates (owner-supplied Kali/target) | rsync from each workhorse's `images/` (templates only — writable guest disks are **not** backed up; guest-state loss falls back to the pinned template per the accepted policy) | `BACKUP_DIR/templates/<host>/` |
 | Guest writable-disk state (`disks/`) | **deliberately not backed up** | — |
 

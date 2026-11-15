@@ -9,6 +9,7 @@ import os
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 PRIVATE_ATTACHMENTS_DIR = BASE_DIR / "private_attachments"
+PRIVATE_TEMPLATES_DIR = BASE_DIR / "private_templates"
 
 
 def env(name, default=""):

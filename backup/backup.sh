@@ -87,6 +87,17 @@ docker run --rm -v "$ATTACH_VOL":/src:ro -v "$(cd "$BACKUP_DIR" && pwd)":/dst \
   alpine tar czf "/dst/attachments-$stamp.tar.gz" -C /src .
 [[ -s "$BACKUP_DIR/attachments-$stamp.tar.gz" ]] || fail "attachments tar is empty"
 
+# --- 3b. Templates volume -------------------------------------------------------
+# Operator-uploaded machine templates (§19 data class): same treatment as
+# attachments. The volume name is resolved from the app container mounts.
+APP_CID="$(docker compose ps -q app)"
+TEMPLATES_VOL="$(docker inspect -f '{{range .Mounts}}{{if eq .Destination "/app/private_templates"}}{{.Name}}{{end}}{{end}}' "$APP_CID")"
+[[ -n "$TEMPLATES_VOL" ]] || fail "templates volume not mounted on the app container"
+log "Tarring templates volume '$TEMPLATES_VOL'"
+docker run --rm -v "$TEMPLATES_VOL":/src:ro -v "$(cd "$BACKUP_DIR" && pwd)":/dst \
+  alpine tar czf "/dst/templates-$stamp.tar.gz" -C /src .
+[[ -s "$BACKUP_DIR/templates-$stamp.tar.gz" ]] || fail "templates tar is empty"
+
 # --- 4. Workhorse pinned templates -------------------------------------------
 if [[ -n "$WORKHORSE_SSH_TARGETS" ]]; then
   for host in $WORKHORSE_SSH_TARGETS; do
@@ -110,6 +121,7 @@ prune_family() {
 prune_family "db-$APP_DB-*.dump" "$BACKUP_RETENTION_DAYS"
 prune_family "db-guacamole_db-*.dump" "$BACKUP_RETENTION_DAYS"
 prune_family "attachments-*.tar.gz" "$BACKUP_RETENTION_DAYS"
+prune_family "templates-*.tar.gz" "$BACKUP_RETENTION_DAYS"
 log "Retention: keeping the last $BACKUP_RETENTION_DAYS of each family"
 
 # --- 6. Reserved off-machine hook (owner deferred) ------------------------------
@@ -121,5 +133,5 @@ else
 fi
 
 log "Summary (this run):"
-ls -lh "$APP_DUMP" "$GUAC_DUMP" "$BACKUP_DIR/attachments-$stamp.tar.gz" | sed 's/^/    /'
+ls -lh "$APP_DUMP" "$GUAC_DUMP" "$BACKUP_DIR/attachments-$stamp.tar.gz" "$BACKUP_DIR/templates-$stamp.tar.gz" | sed 's/^/    /'
 log "BACKUP OK"

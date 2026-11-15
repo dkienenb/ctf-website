@@ -11,8 +11,51 @@ fixed here:
   target 2 GB/1 vCPU/10 GB.
 """
 from django.conf import settings
+from django.core.files.storage import FileSystemStorage
 from django.db import models
 from django.utils import timezone
+
+
+class PrivateTemplateStorage(FileSystemStorage):
+    """Private base-image storage (handoff §19): never served by any web
+    route; content reaches workhorses only through the agent API."""
+
+    def __init__(self, *args, **kwargs):
+        kwargs.setdefault("location", str(settings.PRIVATE_TEMPLATES_DIR))
+        super().__init__(*args, **kwargs)
+
+
+class MachineImage(models.Model):
+    """A versioned base machine image the operator authors (handoff §10, §13).
+
+    One artifact per (role, version): the pinned domain.xml (with @NAME@,
+    @DISK@, @VNC_PORT@, @LAB_NET@ placeholders) plus the uploaded base disk
+    (qcow2/ISO). Files live in private storage on the controller and are
+    staged to workhorses via the agent's template vocabulary — allocation
+    never silently substitutes a different version (§13).
+    """
+
+    class Role(models.TextChoices):
+        ATTACKER = "attacker", "Attacker (Kali)"
+        TARGET = "target", "Target"
+
+    role = models.CharField(max_length=12, choices=Role.choices)
+    version = models.CharField(max_length=80)  # machine-readable, used as a directory name
+    notes = models.CharField(max_length=500, blank=True)
+    domain_xml = models.TextField()  # must carry the four placeholders
+    disk_file = models.FileField(storage=PrivateTemplateStorage(), upload_to="images/", null=True, blank=True)
+    disk_sha256 = models.CharField(max_length=64, blank=True)
+    disk_size = models.PositiveBigIntegerField(default=0)
+    uploaded_by = models.ForeignKey(settings.AUTH_USER_MODEL, null=True, blank=True, on_delete=models.SET_NULL, related_name="+")
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = "labs_machine_image"
+        unique_together = [("role", "version")]
+
+    def __str__(self):
+        return f"{self.role}/{self.version}"
 
 
 class Host(models.Model):
@@ -31,6 +74,7 @@ class Host(models.Model):
     total_ram_gb = models.FloatField(default=0)
     running_labs = models.PositiveSmallIntegerField(default=0)
     management_ip = models.GenericIPAddressField(null=True, blank=True)  # Reported by the agent heartbeat.
+    inventory = models.JSONField(default=dict, blank=True)  # {role: {version: {"<file>": size}}} from the heartbeat.
 
     class Meta:
         db_table = "labs_host"

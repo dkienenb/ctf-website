@@ -93,25 +93,40 @@ restore_db() {
 
 restore_attachments() {
   local tarfile="${1:-$(latest_of 'attachments-*.tar.gz')}"
-  [[ -n "$tarfile" && -s "$tarfile" ]] || fail "no attachments tar in $BACKUP_DIR"
-  confirm "attachments volume with $(basename "$tarfile")"
+  restore_volume "$tarfile" attachments
+}
+
+restore_templates() {
+  local tarfile="${1:-$(latest_of 'templates-*.tar.gz')}"
+  restore_volume "$tarfile" templates
+}
+
+restore_volume() {
+  local tarfile="$1" kind="$2"
+  [[ -n "$tarfile" && -s "$tarfile" ]] || fail "no $kind tar in $BACKUP_DIR"
+  confirm "$kind volume with $(basename "$tarfile")"
 
   APP_CID="$(docker compose ps -q app)"
-  ATTACH_VOL="$(docker inspect -f '{{range .Mounts}}{{if eq .Destination "/app/private_attachments"}}{{.Name}}{{end}}{{end}}' "$APP_CID")"
-  [[ -n "$ATTACH_VOL" ]] || fail "attachments volume not mounted on the app container"
+  local dest
+  case "$kind" in
+    attachments) dest="/app/private_attachments" ;;
+    templates)   dest="/app/private_templates" ;;
+  esac
+  VOL="$(docker inspect -f "{{range .Mounts}}{{if eq .Destination \"$dest\"}}{{.Name}}{{end}}{{end}}" "$APP_CID")"
+  [[ -n "$VOL" ]] || fail "$kind volume not mounted on the app container"
 
   # Safety snapshot of the current contents before they are replaced.
-  local pre="$BACKUP_DIR/attachments-pre-restore-$(date +%Y-%m-%d_%H%M%S).tar.gz"
-  log "Snapshotting current attachments to $(basename "$pre")"
-  docker run --rm -v "$ATTACH_VOL":/src:ro -v "$(cd "$BACKUP_DIR" && pwd)":/dst \
+  local pre="$BACKUP_DIR/$kind-pre-restore-$(date +%Y-%m-%d_%H%M%S).tar.gz"
+  log "Snapshotting current $kind to $(basename "$pre")"
+  docker run --rm -v "$VOL":/src:ro -v "$(cd "$BACKUP_DIR" && pwd)":/dst \
     alpine tar czf "/dst/$(basename "$pre")" -C /src .
 
   stop_serving
-  log "Clearing and restoring attachments volume '$ATTACH_VOL'"
-  docker run --rm -v "$ATTACH_VOL":/src -v "$(cd "$(dirname "$tarfile")" && pwd)":/dst:ro \
+  log "Clearing and restoring $kind volume '$VOL'"
+  docker run --rm -v "$VOL":/src -v "$(cd "$(dirname "$tarfile")" && pwd)":/dst:ro \
     alpine sh -c 'rm -rf /src/..?* /src/.[!.]* /src/*; tar xzf "/dst/$(basename "$0")"' "$tarfile"
   start_serving
-  log "RESTORE OK: attachments from $(basename "$tarfile")"
+  log "RESTORE OK: $kind from $(basename "$tarfile")"
 }
 
 [[ -d "$BACKUP_DIR" ]] || fail "no backup directory at $BACKUP_DIR"
@@ -120,14 +135,16 @@ case "${ARGS[0]:-}" in
   db)          restore_db "$APP_DB" "db-$APP_DB-*.dump" "${ARGS[1]:-}" ;;
   guacamole)   restore_db guacamole_db "db-guacamole_db-*.dump" "${ARGS[1]:-}" ;;
   attachments) restore_attachments "${ARGS[1]:-}" ;;
-  all)         restore_db "$APP_DB" "db-$APP_DB-*.dump"; restore_db guacamole_db "db-guacamole_db-*.dump"; restore_attachments ;;
+  templates)   restore_templates "${ARGS[1]:-}" ;;
+  all)         restore_db "$APP_DB" "db-$APP_DB-*.dump"; restore_db guacamole_db "db-guacamole_db-*.dump"; restore_attachments; restore_templates ;;
   *) cat <<EOF >&2
-Usage: $0 {db|guacamole|attachments|all} [file] [--yes]
+Usage: $0 {db|guacamole|attachments|templates|all} [file] [--yes]
 
   db          [dumpfile]   restore the app database (latest if omitted)
   guacamole   [dumpfile]   restore guacamole_db
   attachments [tarfile]    restore the attachments volume (auto-snapshots first)
-  all                      db + guacamole + attachments
+  templates   [tarfile]    restore the machine-templates volume (auto-snapshots first)
+  all                      db + guacamole + attachments + templates
 
 --yes skips the interactive confirmation.
 EOF

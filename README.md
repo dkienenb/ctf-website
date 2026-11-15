@@ -50,6 +50,10 @@ server for the website and one or more **workhorse** machines for the VMs.
 - **Content authoring**: pools, challenges, questions, accepted answers,
   hint pricing with retroactive-reprice impact previews, lifecycle
   (draft → published → archived) with go-live scheduling.
+- **Machine template authoring**: upload versioned base images (domain.xml
+  + qcow2/ISO) per role, pin them to challenges with per-role sizing, and
+  distribute them to workhorses through the durable command queue — with
+  sha256 verification at both ends and a live host-inventory matrix.
 - **Lab operations**: capacity-based admission with free-storage reserve,
   a durable command queue to workhorse agents, targeted resets (target
   only / full / simulated loss), and host-outage handling.

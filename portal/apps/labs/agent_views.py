@@ -57,9 +57,12 @@ def heartbeat(request):
     management_ip = str(payload.get("management_ip", "") or "")
     if management_ip:
         host.management_ip = management_ip
+    inventory = payload.get("inventory")
+    if isinstance(inventory, dict):
+        host.inventory = inventory
     host.save(update_fields=(
         "last_heartbeat", "agent_version", "free_disk_gb", "total_disk_gb",
-        "free_ram_gb", "total_ram_gb", "running_labs", "management_ip",
+        "free_ram_gb", "total_ram_gb", "running_labs", "management_ip", "inventory",
     ))
     # Reconcile: hand the agent its acknowledged deadlines for local
     # enforcement when the controller link drops (§18).

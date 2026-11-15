@@ -8,6 +8,7 @@ from portal.apps.submissions import views as submission_views
 from portal.apps.submissions import manage_views
 from portal.apps.labs import views as labs_views
 from portal.apps.labs import agent_views as labs_agent_views
+from portal.apps.labs import manage_views as labs_manage_views
 
 urlpatterns = [
     path("admin/", admin.site.urls),
@@ -52,6 +53,10 @@ urlpatterns = [
     path("manage/challenges/create", manage_views.create_challenge, name="manage-create-challenge"),
     path("manage/action", manage_views.action, name="manage-action"),
     path("manage/preapprove", manage_views.preapprove_action, name="manage-preapprove"),
+    path("manage/machines", labs_manage_views.machine_images, name="manage-machine-images"),
+    path("manage/machines/new", labs_manage_views.machine_image_edit, name="manage-machine-image-new"),
+    path("manage/machines/<int:image_id>/edit", labs_manage_views.machine_image_edit, name="manage-machine-image-edit"),
+    path("manage/challenges/<int:challenge_id>/lab-template", manage_views.lab_template_action, name="manage-lab-template"),
     path("labs/<slug:slug>/desktop", labs_views.desktop, name="lab-desktop"),
     path("labs/<slug:slug>/<str:action>", labs_views.lab_action, name="lab-action"),
     path("agentapi/heartbeat", labs_agent_views.heartbeat, name="agent-heartbeat"),

@@ -37,6 +37,13 @@ Token is shown once; put it in `/etc/ctf/agent.toml`.
 
 ## Base images (owner-supplied launch content)
 
+Templates are now authored in the portal: **Administration → Machine
+images** uploads versioned base images (domain.xml + qcow2/ISO), pins them
+to challenges on the challenge's edit page, and distributes them to
+workhorses through the agent's template commands (chunked, sha256-verified,
+§13 explicit pinning). The demo templates below remain the fallback when a
+challenge pins no version.
+
 Each template directory needs two files:
 
 - `images/attacker/domain.xml` — libvirt domain XML with `@NAME@`, `@DISK@`,

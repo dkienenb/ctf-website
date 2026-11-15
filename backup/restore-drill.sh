@@ -94,13 +94,16 @@ else
   log "SKIP: no guacamole_db dump found"
 fi
 
-# --- 4. Attachments tar --------------------------------------------------------
-if [[ -n "$tarfile" && -s "$tarfile" ]]; then
-  count="$(tar -tzf "$tarfile" | wc -l)"
-  log "Attachments tar lists $count entries"
-  [[ "$count" -gt 0 ]] || fail "attachments tar is empty"
-else
-  log "SKIP: no attachments tar found"
-fi
+# --- 4. Attachments / templates tars ---------------------------------------------
+for tar in attachments templates; do
+  tarfile="$(ls -1t "$BACKUP_DIR"/$tar-*.tar.gz 2>/dev/null | grep -v pre-restore | head -n1 || true)"
+  if [[ -n "$tarfile" && -s "$tarfile" ]]; then
+    count="$(tar -tzf "$tarfile" | wc -l)"
+    log "$tar tar lists $count entries"
+    [[ "$count" -gt 0 ]] || fail "$tar tar is empty"
+  else
+    log "SKIP: no $tar tar found"
+  fi
+done
 
 log "DRILL PASS: backups restored into scratch databases and verified"

@@ -1,0 +1,43 @@
+{% extends "base.html" %}
+{% block title %}Machine images — Administration{% endblock %}
+{% block content %}
+<p><a href="{% url 'manage' %}">← Back to administration</a></p>
+<h1>Machine images</h1>
+<p class="muted">Versioned base machines for labs (one attacker + one target per challenge template). A version pins the domain.xml and the uploaded base disk; allocation never silently substitutes another version. Upload happens here on the LAN — large disks must not go through the Cloudflare proxy.</p>
+<p><a class="btn primary" href="{% url 'manage-machine-image-new' %}">New machine image</a></p>
+
+{% if hosts %}
+<p class="muted small">Workhorse inventory is refreshed by each agent heartbeat ({{ hosts|length }} host{{ hosts|pluralize }}).</p>
+{% endif %}
+
+{% for row in images %}
+  <section class="panel">
+    <div class="row">
+      <div>
+        <strong>{{ row.image.role }}/{{ row.image.version }}</strong>
+        <span class="muted small">{{ row.image.disk_size }} bytes · sha256 {{ row.image.disk_sha256|slice:":12" }}… · updated {{ row.image.updated_at|date:"Y-m-d H:i" }}</span>
+        {% if row.image.notes %}<p class="muted small">{{ row.image.notes }}</p>{% endif %}
+      </div>
+      <div class="button-row">
+        <a class="btn small secondary" href="{% url 'manage-machine-image-edit' row.image.id %}">Edit</a>
+        <form method="post" action="{% url 'manage-action' %}">{% csrf_token %}<input type="hidden" name="action" value="distribute-template"><input type="hidden" name="target" value="{{ row.image.id }}"><button class="btn small" type="submit">Distribute to workhorses</button></form>
+        <form method="post" action="{% url 'manage-action' %}">{% csrf_token %}<input type="hidden" name="action" value="delete-template"><input type="hidden" name="target" value="{{ row.image.id }}"><button class="btn small danger" type="submit">Delete</button></form>
+      </div>
+    </div>
+    <table class="table">
+      <tr><th>Workhorse</th><th>domain.xml</th><th>disk-template</th></tr>
+      {% for p in row.presence %}
+        <tr>
+          <td>{{ p.host.name }}</td>
+          <td>{% if 'domain.xml' in p.files %}✓{% else %}<span class="muted">missing</span>{% endif %}</td>
+          <td>{% if 'disk-template' in p.files %}✓ {{ p.files.items|join:", " }}{% else %}<span class="muted">missing</span>{% endif %}</td>
+        </tr>
+      {% empty %}
+        <tr><td colspan="3" class="muted">No workhorses registered yet (agent/ADD-A-WORKHORSE.md).</td></tr>
+      {% endfor %}
+    </table>
+  </section>
+{% empty %}
+  <p>No machine images yet. Challenges without a pinned version use the demo templates on each workhorse.</p>
+{% endfor %}
+{% endblock %}

@@ -1,0 +1,19 @@
+{% extends "base.html" %}
+{% block title %}{% if image %}Edit {{ image.role }}/{{ image.version }}{% else %}New machine image{% endif %} — Administration{% endblock %}
+{% block content %}
+<p><a href="{% url 'manage-machine-images' %}">← Back to machine images</a></p>
+<h1>{% if image %}Edit {{ image.role }}/{{ image.version }}{% else %}New machine image{% endif %}</h1>
+<p class="muted small">domain.xml must contain the four placeholders the agent substitutes: <code>@NAME@</code> <code>@DISK@</code> <code>@VNC_PORT@</code> <code>@LAB_NET@</code> — see the demo pair in <code>agent/demo-images/</code>. The version becomes a directory name on every workhorse.</p>
+<form method="post" enctype="multipart/form-data">
+  {% csrf_token %}
+  {{ form.as_p }}
+  <p>
+    <label for="id_disk">Base disk (qcow2 / ISO) —{% if image and image.disk_file %} current: {{ image.disk_size }} bytes, sha256 {{ image.disk_sha256|slice:":16" }}…{% endif %}</label>
+    <input type="file" name="disk" id="id_disk"{% if image %}{% else %} required{% endif %}>
+  </p>
+  <button class="btn primary" type="submit">{% if image %}Save image{% else %}Create image{% endif %}</button>
+</form>
+{% if image and image.disk_file %}
+<p class="muted small">Saving without a new disk keeps the uploaded one. Changing content requires a re-distribution; reset running labs on this version first.</p>
+{% endif %}
+{% endblock %}

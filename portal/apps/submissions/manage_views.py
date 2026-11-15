@@ -215,13 +215,86 @@ def content_edit(request, challenge_id):
         else:
             messages.error(request, "Check the form fields.")
     upload_form = AttachmentUploadForm()
+    lab_template = getattr(challenge, "labtemplate", None)
     return render(request, "manage/content_edit.html", {
         "challenge": challenge, "form": form, "upload_form": upload_form,
+        "lab_template_form": LabTemplateForm(initial=_lab_template_initial(lab_template)),
+        "lab_template": lab_template,
     })
 
 
 class AttachmentUploadForm(forms.Form):
     file = forms.FileField(allow_empty_file=False)
+
+
+class LabTemplateForm(forms.Form):
+    """Challenge → pinned machine template versions + per-role sizing (§10)."""
+
+    attacker_version = forms.ChoiceField(required=False)
+    target_version = forms.ChoiceField(required=False)
+    attacker_ram_mb = forms.IntegerField(min_value=128, max_value=65536, initial=4096)
+    attacker_vcpu = forms.IntegerField(min_value=1, max_value=64, initial=2)
+    attacker_disk_gb = forms.IntegerField(min_value=1, max_value=1024, initial=20)
+    target_ram_mb = forms.IntegerField(min_value=128, max_value=65536, initial=2048)
+    target_vcpu = forms.IntegerField(min_value=1, max_value=64, initial=1)
+    target_disk_gb = forms.IntegerField(min_value=1, max_value=1024, initial=10)
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        from portal.apps.labs.models import MachineImage
+
+        attacker = MachineImage.objects.filter(role=MachineImage.Role.ATTACKER).order_by("version")
+        target = MachineImage.objects.filter(role=MachineImage.Role.TARGET).order_by("version")
+        demo = [("", "Demo template (agent/SETUP.md)")]
+        self.fields["attacker_version"].choices = demo + [(image.version, image.version) for image in attacker]
+        self.fields["target_version"].choices = demo + [(image.version, image.version) for image in target]
+
+
+def _lab_template_initial(template):
+    if template is None:
+        return {}
+    return {
+        "attacker_version": template.attacker_version,
+        "target_version": template.target_version,
+        "attacker_ram_mb": template.attacker_ram_mb,
+        "attacker_vcpu": template.attacker_vcpu,
+        "attacker_disk_gb": template.attacker_disk_gb,
+        "target_ram_mb": template.target_ram_mb,
+        "target_vcpu": template.target_vcpu,
+        "target_disk_gb": template.target_disk_gb,
+    }
+
+
+@admin_page
+def lab_template_action(request, challenge_id):
+    """Bind a challenge to pinned template versions + sizing."""
+    from portal.apps.content.models import Challenge
+    from portal.apps.labs.models import LabTemplate
+    from portal.apps.labs import services as lab_services
+
+    challenge = get_object_or_404(Challenge, pk=challenge_id)
+    if request.method != "POST":
+        return redirect("manage-content-edit", challenge_id=challenge_id)
+    form = LabTemplateForm(request.POST)
+    if form.is_valid():
+        try:
+            lab_services.lab_template_save(
+                request.user, challenge_id,
+                attacker_version=form.cleaned_data["attacker_version"],
+                target_version=form.cleaned_data["target_version"],
+                attacker_ram_mb=form.cleaned_data["attacker_ram_mb"],
+                attacker_vcpu=form.cleaned_data["attacker_vcpu"],
+                attacker_disk_gb=form.cleaned_data["attacker_disk_gb"],
+                target_ram_mb=form.cleaned_data["target_ram_mb"],
+                target_vcpu=form.cleaned_data["target_vcpu"],
+                target_disk_gb=form.cleaned_data["target_disk_gb"],
+            )
+            messages.success(request, "Machine template pinned for this challenge.")
+        except lab_services.ServiceError as error:
+            messages.error(request, error.message)
+    else:
+        messages.error(request, "Check the form fields.")
+    return redirect("manage-content-edit", challenge_id=challenge_id)
 
 
 @admin_page
@@ -303,6 +376,8 @@ def _confirm_text(action, target):
         "reset-target": ("Reset the target only?", "The target returns to its pinned template. The attacker workspace, questions, hints, and scores are preserved."),
         "reset-full": ("Reset both guests?", "Both guests return to their pinned templates. Attacker history is cleared. Questions, hints, and scores are retained."),
         "recover": ("Simulate irrecoverable target loss?", "The affected target returns to its pinned template and the user is notified. Application progress is preserved."),
+        "distribute-template": ("Distribute this machine image to every workhorse?", "The pinned domain.xml and base disk are staged through the durable command queue; retries are idempotent. Reset any running lab using this version first — replacing template files under running guests is not safe."),
+        "delete-template": ("Delete this machine image?", "The artifact and its uploaded disk are removed. Deletion is refused while any challenge template still pins this version."),
     }
     return texts.get(action, ("Confirm action?", "Apply this operator action?"))
 
@@ -320,6 +395,8 @@ def _success_text(action):
         "reset-target": "Target reset command issued.",
         "reset-full": "Full reset command issued.",
         "recover": "Recovery command issued.",
+        "distribute-template": "Distribution queued.",
+        "delete-template": "Machine image deleted.",
     }.get(action, "Action applied.")
 
 
@@ -348,6 +425,10 @@ def _perform_action(actor, action, target):
         user_id, challenge_id = target.split(":")
         lab_services.admin_reset(actor, int(user_id), int(challenge_id),
                                  {"reset-target": "target", "reset-full": "full", "recover": "recover"}[action])
+    elif action == "distribute-template":
+        lab_services.distribute_machine_image(actor, int(target))
+    elif action == "delete-template":
+        lab_services.delete_machine_image(actor, int(target))
     else:
         raise adminops.ServiceError("Unknown administrator action.")
 

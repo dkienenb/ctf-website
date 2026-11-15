@@ -27,6 +27,11 @@ import time
 import urllib.error
 import urllib.request
 from pathlib import Path
+import base64
+import hashlib
+import os
+import re
+import shutil
 
 CONFIG_PATH = os.environ.get("CTF_AGENT_CONFIG", "/etc/ctf/agent.toml")
 # Storage lives inside libvirt's own images area: Kali/Debian AppArmor
@@ -118,7 +123,151 @@ class LibvirtExecutor:
         )
         return result.returncode == 0
 
-    # --- operations -----------------------------------------------------
+    # --- machine template staging (§10, §13) -----------------------------
+    # Templates are operator-authored version directories under images_dir:
+    #   images_dir/<role>/<version>/{domain.xml,disk-template}
+    # A version-less allocate (demo mode) falls back to the bare role dir.
+
+    ROLES = ("attacker", "target")
+    TEMPLATE_FILES = ("domain.xml", "disk-template")
+    STAGING_DIRNAME = ".staging"
+
+    def _check_name(self, value, what):
+        if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,79}", str(value or "")):
+            raise AgentError(f"invalid {what}: refused for path safety")
+        return str(value)
+
+    def template_dir(self, role, version=""):
+        """Directory holding a role's pinned template (version subdirectory
+        when a version is pinned; the bare role directory in demo mode)."""
+        self._check_name(role, "role")
+        if role not in self.ROLES:
+            raise AgentError(f"unknown template role: {role}")
+        if version:
+            self._check_name(version, "template version")
+            return self.images_dir / role / version
+        return self.images_dir / role
+
+    def _inventory_files(self, directory):
+        return {
+            entry.name: entry.stat().st_size
+            for entry in sorted(directory.iterdir())
+            if entry.is_file() and not entry.name.startswith(".")
+        }
+
+    def template_inventory(self):
+        """What template versions exist locally: {role: {version: {file: size}}}."""
+        inventory = {}
+        for role in self.ROLES:
+            role_dir = self.images_dir / role
+            if not role_dir.exists():
+                continue
+            bare = self._inventory_files(role_dir)
+            if bare:
+                inventory.setdefault(role, {})[""] = bare
+            for version_dir in sorted(role_dir.iterdir()):
+                if version_dir.is_dir() and not version_dir.name.startswith("."):
+                    files = self._inventory_files(version_dir)
+                    if files:
+                        inventory.setdefault(role, {})[version_dir.name] = files
+        return inventory
+
+    def template_put(self, command):
+        """Store one chunk of a staged template file (§10). Chunks accumulate
+        under disks_dir/.staging keyed by content hash; when the last chunk
+        lands, the file is reassembled, sha256-verified, and moved into the
+        template directory. Idempotent: re-sending a chunk overwrites the
+        same part; a complete file with the matching hash is left untouched."""
+        payload = command["payload"]
+        role = self._check_name(payload.get("role", ""), "role")
+        if role not in self.ROLES:
+            raise AgentError(f"unknown template role: {role}")
+        version = self._check_name(payload.get("version", ""), "template version")
+        file_name = payload.get("file", "")
+        if file_name not in self.TEMPLATE_FILES:
+            raise AgentError(f"refusing template file: {file_name} (closed list)")
+        try:
+            seq, total = int(payload.get("seq", 0)), int(payload.get("total", 0))
+        except (TypeError, ValueError):
+            raise AgentError("template-put requires integer seq/total")
+        if not 1 <= seq <= total:
+            raise AgentError("chunk seq outside 1..total")
+        try:
+            blob = base64.b64decode(payload.get("data_b64", ""), validate=True)
+        except Exception:
+            raise AgentError("template-put data_b64 is not valid base64")
+        sha = str(payload.get("sha256", ""))
+        if not re.fullmatch(r"[0-9a-f]{64}", sha):
+            raise AgentError("template-put requires a 64-hex sha256")
+
+        staging = self.disks_dir / self.STAGING_DIRNAME / f"{role}.{version}.{file_name}.{sha[:12]}"
+        staging.mkdir(parents=True, exist_ok=True)
+        (staging / f"part-{seq:06d}").write_bytes(blob)
+        parts = sorted(staging.glob("part-*"))
+        if len(parts) < total:
+            return {"staged": f"{seq}/{total}", "complete": False}
+        if len(parts) > total:
+            shutil.rmtree(staging, ignore_errors=True)
+            raise AgentError("staging holds more parts than the transfer declared")
+
+        target_dir = self.template_dir(role, version)
+        target_dir.mkdir(parents=True, exist_ok=True)
+        incoming = target_dir / f".incoming-{file_name}"
+        hasher = hashlib.sha256()
+        with incoming.open("wb") as out:
+            for part in parts:
+                with part.open("rb") as src:
+                    shutil.copyfileobj(src, out, length=1024 * 1024)
+                with part.open("rb") as src:
+                    for block in iter(lambda: src.read(1024 * 1024), b""):
+                        hasher.update(block)
+        if hasher.hexdigest() != sha:
+            incoming.unlink(missing_ok=True)
+            shutil.rmtree(staging, ignore_errors=True)
+            raise AgentError("reassembled template failed sha256 verification")
+        os.replace(incoming, target_dir / file_name)
+        total_bytes = sum(part.stat().st_size for part in parts)
+        shutil.rmtree(staging, ignore_errors=True)
+        return {"staged": f"{role}/{version}/{file_name}", "complete": True, "bytes": total_bytes}
+
+    def template_verify(self, command):
+        """Prove a staged version matches what the controller pinned (§13)."""
+        payload = command["payload"]
+        role = payload.get("role", "")
+        version = payload.get("version", "")
+        expected_sha = str(payload.get("sha256", ""))
+        if not re.fullmatch(r"[0-9a-f]{64}", expected_sha):
+            raise AgentError("template-verify requires a 64-hex sha256")
+        disk = self.template_dir(role, version) / "disk-template"
+        if not disk.exists():
+            raise AgentError(f"staged template missing: {disk}")
+        hasher = hashlib.sha256()
+        size = 0
+        with disk.open("rb") as src:
+            for block in iter(lambda: src.read(1024 * 1024), b""):
+                hasher.update(block)
+                size += len(block)
+        if hasher.hexdigest() != expected_sha:
+            raise AgentError(f"staged disk-template hash mismatch for {role}/{version}")
+        expected_size = int(payload.get("size", size))
+        if expected_size and size != expected_size:
+            raise AgentError(f"staged disk-template size mismatch for {role}/{version}: {size} != {expected_size}")
+        return {"verified": f"{role}/{version}", "bytes": size}
+
+    def template_remove(self, command):
+        """Remove one versioned template directory (explicit operator action)."""
+        payload = command["payload"]
+        role = payload.get("role", "")
+        version = self._check_name(payload.get("version", ""), "template version")
+        if role not in self.ROLES:
+            raise AgentError(f"unknown template role: {role}")
+        directory = self.images_dir / role / version
+        if directory.exists():
+            shutil.rmtree(directory)
+            return {"removed": f"{role}/{version}"}
+        return {"removed": None}
+
+    # --- operations -------------------------------------------------------
 
     def lab_net(self, lab_id):
         """Per-lab isolated network name/subnet (§17). Deterministic."""
@@ -213,10 +362,10 @@ class LibvirtExecutor:
         lab = payload.get("lab")
         net = self._ensure_lab_net(lab)
         expected_net = net["name"]
-        template = self.images_dir / "attacker"
-        target_template = self.images_dir / "target"
+        attacker_template = self.template_dir("attacker", payload.get("attacker_version", ""))
+        target_template = self.template_dir("target", payload.get("target_version", ""))
         vnc_port = str(payload.get("vnc_port", "5900"))
-        for name, directory, role in ((attacker, template, "attacker"), (target, target_template, "target")):
+        for name, directory, role in ((attacker, attacker_template, "attacker"), (target, target_template, "target")):
             domain_xml = directory / "domain.xml"
             disk_source = self.disks_dir / f"{name}.qcow2"
             if not domain_xml.exists():
@@ -323,6 +472,10 @@ VOCABULARY = {
     "reset-full": lambda executor, command: executor.reset({**command, "scope": "full"}),
     "recover": lambda executor, command: executor.reset({**command, "scope": "target"}),
     "refresh-lease": lambda executor, command: {"acknowledged": command.get("acknowledged_deadline")},
+    "template-put": lambda executor, command: executor.template_put(command),
+    "template-verify": lambda executor, command: executor.template_verify(command),
+    "template-remove": lambda executor, command: executor.template_remove(command),
+    "template-list": lambda executor, command: executor.template_inventory(),
 }
 
 
@@ -376,6 +529,7 @@ def collect_resources(config, running_labs=0):
         "total_ram_gb": round(meminfo.get("MemTotal", 0) / 1e6, 2),
         "running_labs": running_labs,
         "management_ip": config.get("management_ip", ""),
+        "inventory": LibvirtExecutor(images_dir=config["images_dir"]).template_inventory(),
     }
 
 
