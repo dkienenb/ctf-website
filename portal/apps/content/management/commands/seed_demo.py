@@ -135,8 +135,7 @@ class Command(BaseCommand):
                     challenge.save()
                 if definition.get("lab"):
                     template, _ = LabTemplate.objects.get_or_create(
-                        attacker_version=LAB_TEMPLATE_DEFAULTS["attacker_version"],
-                        target_version=LAB_TEMPLATE_DEFAULTS["target_version"],
+                        challenge=challenge,
                         defaults=LAB_TEMPLATE_DEFAULTS,
                     )
                     if template.challenge_id != challenge.id:
