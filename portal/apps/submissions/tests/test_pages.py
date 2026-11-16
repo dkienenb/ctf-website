@@ -8,7 +8,7 @@ from django.urls import reverse
 
 from portal.apps.accounts.models import User
 from portal.apps.content.models import Attachment, Challenge, Pool, PoolChallenge, Question, AcceptedAnswer, Hint
-from portal.apps.submissions.models import Solve
+from portal.apps.submissions.models import Solve, Submission
 
 from portal.apps.testutils import make_question, make_user  # reuse helpers
 
@@ -194,3 +194,45 @@ def Submission_eligible(question):
     from portal.apps.submissions.models import Submission
 
     return Submission.objects.filter(question=question, eligible=True).count()
+
+
+@override_settings(SUBMISSION_COOLDOWN_SECONDS=0)
+class AnswerRateLimitTests(TestCase):
+    """The per-IP flood cap on the answer endpoint: production-only,
+    keyed on CF-Connecting-IP behind the proxy, generous for humans."""
+
+    def setUp(self):
+        self.user = make_user("990000000000000001", "Flood")
+        self.client.force_login(self.user)
+        self.question = make_question(["flag"], points=100)
+        self.url = reverse("submit-answer", args=[self.question.challenge.slug, self.question.id])
+
+    def test_limit_is_disabled_in_debug(self):
+        with override_settings(DEBUG=True, ANSWER_IP_RATE_LIMIT=1):
+            for _ in range(5):
+                response = self.client.post(self.url, {"answer": "wrong", "request_id": uuid.uuid4().hex})
+            self.assertEqual(response.status_code, 302)  # never throttled in dev
+
+    def test_flood_is_refused_and_counts_nothing(self):
+        from django.core.cache import cache
+        cache.clear()
+        with override_settings(DEBUG=False, ANSWER_IP_RATE_LIMIT=2):
+            self.client.post(self.url, {"answer": "one", "request_id": uuid.uuid4().hex})
+            self.client.post(self.url, {"answer": "two", "request_id": uuid.uuid4().hex})
+            response = self.client.post(self.url, {"answer": "three", "request_id": uuid.uuid4().hex}, follow=True)
+            self.assertContains(response, "Too many attempts from this network")
+            self.assertEqual(Submission.objects.count(), 2)  # the flood attempt counted nothing
+
+    def test_cf_connecting_ip_keys_the_limit(self):
+        from django.core.cache import cache
+        cache.clear()
+        with override_settings(DEBUG=False, ANSWER_IP_RATE_LIMIT=1):
+            self.client.post(self.url, {"answer": "one", "request_id": uuid.uuid4().hex},
+                             HTTP_CF_CONNECTING_IP="198.51.100.7")
+            response = self.client.post(self.url, {"answer": "two", "request_id": uuid.uuid4().hex},
+                                        HTTP_CF_CONNECTING_IP="198.51.100.7", follow=True)
+            self.assertContains(response, "Too many attempts")
+            # A different edge-reported IP is unaffected.
+            response = self.client.post(self.url, {"answer": "two", "request_id": uuid.uuid4().hex},
+                                        HTTP_CF_CONNECTING_IP="198.51.100.8")
+            self.assertEqual(response.status_code, 302)

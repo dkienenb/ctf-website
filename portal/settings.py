@@ -44,6 +44,10 @@ SESSION_COOKIE_SAMESITE = "Lax"
 # to flow, so this is env-gated rather than unconditional.
 SESSION_COOKIE_SECURE = env("DJANGO_COOKIE_SECURE", "0") == "1"
 CSRF_COOKIE_SECURE = env("DJANGO_COOKIE_SECURE", "0") == "1"
+# Per-IP flood control on the answer endpoint (production only; DEBUG skips
+# it). 60/minute is far above any human answering cadence — the per-user
+# submission cooldown is the fairness mechanism; this is the volumetric cap.
+ANSWER_IP_RATE_LIMIT = int(env("ANSWER_IP_RATE_LIMIT", "60"))
 X_FRAME_OPTIONS = "DENY"
 SECURE_CONTENT_TYPE_NOSNIFF = True
 REFERRER_POLICY = "same-origin"

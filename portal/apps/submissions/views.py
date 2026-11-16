@@ -5,7 +5,9 @@ carry real CSRF tokens; feedback flows through the messages framework.
 """
 import uuid
 
+from django.conf import settings
 from django.contrib import messages
+from django.core.cache import cache
 from django.http import JsonResponse
 from django.shortcuts import get_object_or_404, redirect, render
 from django.utils import timezone
@@ -15,6 +17,32 @@ from portal.apps.content.models import Challenge, Hint, Pool, Question
 
 from . import services
 from .models import Solve, Submission
+
+
+def _client_ip(request):
+    """The player's IP. Behind the Cloudflare proxy the edge-set
+    CF-Connecting-IP header is the trustworthy value (the edge overwrites
+    it; players cannot spoof it). Direct LAN access falls back to the
+    socket address."""
+    forwarded = request.META.get("HTTP_CF_CONNECTING_IP", "").strip()
+    return forwarded or request.META.get("REMOTE_ADDR", "")
+
+
+def _rate_limited(request, scope, limit, window_seconds):
+    """Simple fixed-window counter for production-only flood control.
+    Skipped entirely when DEBUG (single-operator dev mode)."""
+    if getattr(settings, "DEBUG", False):
+        return False
+    ip = _client_ip(request)
+    if not ip:
+        return False
+    key = f"ratelimit:{scope}:{ip}"
+    try:
+        current = cache.get_or_set(key, 0, timeout=window_seconds) + 1
+        cache.set(key, current, timeout=window_seconds)
+    except Exception:
+        return False  # cache unavailable: fail open, never lock players out
+    return current > limit
 
 
 def _pool_from_request(request):
@@ -80,6 +108,13 @@ def submit_answer(request, slug, question_id):
     challenge = get_object_or_404(Challenge, slug=slug)
     question = get_object_or_404(Question, pk=question_id, challenge=challenge)
     if request.method == "POST":
+        # Flood control (§23 alert posture): per-IP fixed window, production
+        # only. Generous enough that a human answering on cooldown can never
+        # trip it; the per-user cooldown remains the fairness mechanism.
+        limit = int(getattr(settings, "ANSWER_IP_RATE_LIMIT", 60))
+        if _rate_limited(request, "answer", limit, 60):
+            messages.error(request, "Too many attempts from this network. Wait a minute and try again.")
+            return redirect("challenge_detail", slug=slug)
         answer = request.POST.get("answer", "")
         request_id = request.POST.get("request_id", "") or uuid.uuid4().hex
         try:
