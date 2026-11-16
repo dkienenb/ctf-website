@@ -19,7 +19,9 @@
         <span class="muted small">pre-approved {{ item.decision.created_at|date:"Y-m-d H:i" }}{% if item.decision.actor %} by {{ item.decision.actor.cached_name|default:item.decision.actor.discord_id }}{% endif %}{% if item.decision.note %} — {{ item.decision.note }}{% endif %}</span>
       </div>
       <div class="button-row">
-        {% if item.account_pk %}
+        {% if item.revoked %}
+          <span class="badge">revoked</span>
+        {% elif item.account_pk %}
           <span class="badge">account: {{ item.account_status }}</span>
         {% else %}
           <span class="badge">awaiting first sign-in</span>

@@ -125,14 +125,21 @@ QuestionFormSet = formset_factory(QuestionForm, extra=0)
 @admin_page
 def dashboard(request):
     def _preapproval_rows():
-        """Recent pre-approvals with the current state of each Discord ID."""
+        """Recent pre-approvals with the current state of each Discord ID.
+        A revoked pre-approval stays in the ledger (append-only) and is
+        displayed as revoked — no re-revoke button, no pending state."""
         rows = []
         for decision in ApprovalDecision.objects.filter(decision="preapprove").order_by("-id")[:20]:
             account = User.objects.filter(discord_id=decision.discord_id).first()
+            latest = ApprovalDecision.objects.filter(
+                discord_id=decision.discord_id,
+                decision__in=("preapprove", "approve", "revoke-preapprove"),
+            ).order_by("-id").first()
             rows.append({
                 "decision": decision,
                 "account_pk": account.id if account else None,
                 "account_status": account.status if account else "",
+                "revoked": latest is not None and latest.decision == "revoke-preapprove",
             })
         return rows
 

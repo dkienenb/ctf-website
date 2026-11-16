@@ -62,6 +62,19 @@ class OperatorServiceTests(TestCase):
         self.assertContains(response, "account: approved")
         self.assertContains(response, "by Admin")  # the operator who pre-approved
 
+    def test_dashboard_shows_revoked_preapprovals_as_revoked(self):
+        """A revoked pre-approval displays its true state — not a pending
+        row with a Revoke button (the owner spotted this live: a test row
+        looked 'awaiting first sign-in' after being revoked)."""
+        self.client.force_login(self.admin)
+        adminops.preapprove(self.admin, "470000000000000004")
+        adminops.revoke_preapproval(self.admin, "470000000000000004")
+        response = self.client.get(reverse("manage"))
+        self.assertContains(response, "470000000000000004")
+        self.assertContains(response, ">revoked</span>")
+        revoked_row = response.content.decode().split("470000000000000004", 1)[1]
+        self.assertNotIn("revoke-preapproval", revoked_row[:1200])  # no re-revoke button
+
     def test_dashboard_empty_preapproval_list(self):
         self.client.force_login(self.admin)
         self.assertContains(self.client.get(reverse("manage")), "No pre-approved IDs yet.")
