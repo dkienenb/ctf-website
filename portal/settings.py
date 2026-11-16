@@ -11,6 +11,15 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 PRIVATE_ATTACHMENTS_DIR = BASE_DIR / "private_attachments"
 PRIVATE_TEMPLATES_DIR = BASE_DIR / "private_templates"
 
+# Under the test runner, route private storage into throwaway temp dirs:
+# test uploads would otherwise leave orphan files in the live directories
+# (the DB rolls back; files do not). Storage locations resolve at import.
+import sys as _sys
+if "test" in _sys.argv:
+    import tempfile as _tempfile
+    PRIVATE_ATTACHMENTS_DIR = _tempfile.mkdtemp(prefix="test-attachments-")
+    PRIVATE_TEMPLATES_DIR = _tempfile.mkdtemp(prefix="test-templates-")
+
 
 def env(name, default=""):
     return os.environ.get(name, default)
