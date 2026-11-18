@@ -47,7 +47,6 @@ class HintEditForm(forms.Form):
 class ContentEditForm(forms.Form):
     title = forms.CharField(max_length=200)
     author = forms.CharField(max_length=100, required=False, help_text="Display-only credit shown on the challenge page.")
-    summary = forms.CharField(max_length=300, required=False)
     description = forms.CharField(widget=forms.Textarea(attrs={"rows": 4}), required=False)
     pools = forms.ModelMultipleChoiceField(queryset=Pool.objects.all(), widget=forms.CheckboxSelectMultiple)
     lifecycle = forms.ChoiceField(choices=Challenge.Lifecycle.choices)
@@ -79,9 +78,9 @@ class CreateChallengeForm(forms.Form):
 
 
 class QuestionForm(forms.Form):
-    """One question of a new challenge; answers are one per line (alternates
-    match exactly, like the edit page's accepted-answer editor). An entirely
-    blank row is skipped; a partially filled row is an error."""
+    """One question of a new challenge: text fields only — prompt and
+    accepted answers (one per line, exact-match alternates like the edit
+    page). Points default to 100 and are adjusted in the challenge editor."""
 
     prompt = forms.CharField(
         max_length=1000, required=False,
@@ -93,53 +92,48 @@ class QuestionForm(forms.Form):
         widget=forms.Textarea(attrs={"rows": 2}), required=False,
         help_text="Each line is an accepted answer; matching is exact.",
     )
-    points = forms.IntegerField(
-        min_value=0, required=False,
-        label="Points",
-        help_text="What this question is worth.",
-    )
 
     def clean(self):
         data = super().clean()
         prompt = (data.get("prompt") or "").strip()
         answers = [line.strip() for line in (data.get("answers") or "").splitlines() if line.strip()]
-        points = data.get("points")
-        if not prompt and not answers and points is None:
+        if not prompt and not answers:
             self.skipped = True  # entirely blank extra row
             return data
         if not prompt:
             self.add_error("prompt", "Prompt is required.")
         if not answers:
             self.add_error("answers", "At least one accepted answer is required.")
-        if points is None:
-            self.add_error("points", "Points are required.")
         return data
 
     def cleaned_answers(self):
         return [line.strip() for line in (self.cleaned_data.get("answers") or "").splitlines() if line.strip()]
 
 
-QuestionFormSet = formset_factory(QuestionForm, extra=0)
+QuestionFormSet = formset_factory(QuestionForm, extra=0, can_delete=True)
 
 
 @admin_page
 def dashboard(request):
     def _preapproval_rows():
-        """Recent pre-approvals with the current state of each Discord ID.
-        A revoked pre-approval stays in the ledger (append-only) and is
-        displayed as revoked — no re-revoke button, no pending state."""
+        """Only live pre-approvals: awaiting first sign-in. Entries with an
+        account or a revocation are dropped from the list (the accounts
+        panel and the ledger history cover them)."""
         rows = []
         for decision in ApprovalDecision.objects.filter(decision="preapprove").order_by("-id")[:20]:
-            account = User.objects.filter(discord_id=decision.discord_id).first()
+            if User.objects.filter(discord_id=decision.discord_id).exists():
+                continue  # already used: the accounts panel shows the account
             latest = ApprovalDecision.objects.filter(
                 discord_id=decision.discord_id,
                 decision__in=("preapprove", "approve", "revoke-preapprove"),
             ).order_by("-id").first()
+            if latest is None or latest.decision == "revoke-preapprove":
+                continue  # revoked: not pending anything
             rows.append({
                 "decision": decision,
-                "account_pk": account.id if account else None,
-                "account_status": account.status if account else "",
-                "revoked": latest is not None and latest.decision == "revoke-preapprove",
+                "account_pk": None,
+                "account_status": "",
+                "revoked": False,
             })
         return rows
 
@@ -322,7 +316,6 @@ def content_edit(request, challenge_id):
     initial = {
         "title": challenge.title,
         "author": challenge.author,
-        "summary": challenge.summary,
         "description": challenge.description,
         "pools": [membership.pool for membership in challenge.memberships.all()],
         "lifecycle": challenge.lifecycle,
@@ -340,7 +333,6 @@ def content_edit(request, challenge_id):
                     request.user, challenge,
                     title=form.cleaned_data["title"],
                     author=form.cleaned_data["author"],
-                    summary=form.cleaned_data["summary"],
                     description=form.cleaned_data["description"],
                     pool_ids=[pool.id for pool in form.cleaned_data["pools"]],
                     lifecycle=form.cleaned_data["lifecycle"],
@@ -355,9 +347,11 @@ def content_edit(request, challenge_id):
         else:
             messages.error(request, "Check the form fields.")
     upload_form = AttachmentUploadForm()
+    hint_form = HintEditForm()
     lab_template = getattr(challenge, "lab_template", None)  # reverse OneToOne accessor
     return render(request, "manage/content_edit.html", {
         "challenge": challenge, "form": form, "upload_form": upload_form,
+        "hint_form": hint_form,
         "lab_template_form": LabTemplateForm(initial=_lab_template_initial(lab_template)),
         "lab_template": lab_template,
         "question_forms": _inline_question_forms(challenge),
@@ -466,6 +460,31 @@ def _lab_template_initial(template):
 
 
 @admin_page
+def hint_create(request, challenge_id):
+    """Create a hint from the challenge edit page."""
+    from portal.apps.content.models import Challenge
+
+    challenge = get_object_or_404(Challenge, pk=challenge_id)
+    if request.method != "POST":
+        return redirect("manage-content-edit", challenge_id=challenge_id)
+    form = HintEditForm(request.POST)
+    if form.is_valid():
+        try:
+            adminops.create_hint(
+                request.user, challenge_id,
+                description=form.cleaned_data["description"],
+                text=form.cleaned_data["text"],
+                cost=form.cleaned_data["cost"],
+            )
+            messages.success(request, "Hint created.")
+        except adminops.ServiceError as error:
+            messages.error(request, error.message)
+    else:
+        messages.error(request, "Check the form fields.")
+    return redirect("manage-content-edit", challenge_id=challenge_id)
+
+
+@admin_page
 def lab_template_action(request, challenge_id):
     """Bind a challenge to pinned template versions + sizing."""
     from portal.apps.content.models import Challenge
@@ -529,10 +548,11 @@ def create_challenge(request):
                 {
                     "prompt": row.cleaned_data["prompt"],
                     "answers": row.cleaned_answers(),
-                    "points": row.cleaned_data["points"],
+                    "points": 100,
                 }
                 for row in formset.forms
                 if row.has_changed() and not getattr(row, "skipped", False)
+                and not row.cleaned_data.get("DELETE")
             ]
             try:
                 challenge = adminops.create_challenge(
@@ -550,7 +570,7 @@ def create_challenge(request):
         else:
             messages.error(request, "Check the form fields.")
     else:
-        form = CreateChallengeForm()
+        form = CreateChallengeForm(initial={"author": request.user.cached_name or ""})
         formset = QuestionFormSet(prefix="questions", initial=[{}])
     return render(request, "manage/challenge_create.html", {
         "form": form, "formset": formset,

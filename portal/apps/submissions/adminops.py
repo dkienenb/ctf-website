@@ -178,6 +178,27 @@ def apply_hint_edit(actor, hint, *, cost, description, text, reason="", expected
     return {"message": "Change applied. Results recalculated.", "revision": DataRevision.current()}
 
 
+def create_hint(actor, challenge_id, *, description, text, cost):
+    """Author a new hint on a challenge (operator pages, §9)."""
+    _assert_admin(actor)
+    try:
+        challenge = Challenge.objects.get(pk=challenge_id)
+    except Challenge.DoesNotExist:
+        raise ServiceError("Challenge not found.", 404)
+    if not isinstance(description, str) or not description.strip():
+        raise ServiceError("Hint description is required.")
+    if not isinstance(text, str) or not text.strip():
+        raise ServiceError("Protected hint text is required.")
+    if isinstance(cost, bool) or not isinstance(cost, int) or cost < 0:
+        raise ServiceError("Use a nonnegative integer hint price.")
+    hint = Hint.objects.create(
+        challenge=challenge, description=description.strip(), text=text.strip(), cost=cost,
+    )
+    _audit(actor, "hint-create", "", {"hint": hint.id, "challenge": challenge.id})
+    DataRevision.bump()
+    return hint
+
+
 def refund_hint(actor, user_id, hint_id):
     _assert_admin(actor)
     redemption = HintRedemption.objects.filter(user_id=user_id, hint_id=hint_id).first()
@@ -246,7 +267,7 @@ def create_challenge(actor, *, title, description="", pool_ids=(), author="", qu
         raise ServiceError("Select valid pools.")
     cleaned = _clean_questions(questions)
     challenge = Challenge.objects.create(
-        title=title.strip(), slug=_unique_slug(title), summary="Draft challenge",
+        title=title.strip(), slug=_unique_slug(title),
         description=description, lifecycle=Challenge.Lifecycle.DRAFT,
         author=author.strip(),
     )
@@ -364,7 +385,7 @@ def delete_pool(actor, pool_id):
     DataRevision.bump()
 
 
-def edit_content(actor, challenge, *, title, summary, description, pool_ids, expected_revision,
+def edit_content(actor, challenge, *, title, description, pool_ids, expected_revision,
                  lifecycle=None, go_live=None, author=""):
     _assert_admin(actor)
     if DataRevision.current() != expected_revision:
@@ -383,10 +404,9 @@ def edit_content(actor, challenge, *, title, summary, description, pool_ids, exp
         raise ServiceError("Select at least one pool.")
     with transaction_atomic():
         challenge.title = title.strip()
-        challenge.summary = str(summary or "")
         challenge.description = str(description or "")
         challenge.author = author.strip()
-        challenge.save(update_fields=("title", "summary", "description", "author", "updated_at"))
+        challenge.save(update_fields=("title", "description", "author", "updated_at"))
         PoolChallenge.objects.filter(challenge=challenge).delete()
         PoolChallenge.objects.bulk_create([PoolChallenge(pool=pool, challenge=challenge) for pool in pools])
         if lifecycle is not None:

@@ -21,7 +21,7 @@ from fractions import Fraction
 
 from django.conf import settings
 from django.db import IntegrityError, transaction
-from django.db.models import Max, Sum
+from django.db.models import Max, Q, Sum
 from django.utils import timezone
 
 from portal.apps.accounts.models import User
@@ -144,6 +144,14 @@ def redeem(user, hint_id):
     }
 
 
+def _visible_challenges_queryset():
+    """The challenge set players can currently see (published + go-live passed)."""
+    now = timezone.now()
+    return Challenge.objects.filter(lifecycle=Challenge.Lifecycle.PUBLISHED).filter(
+        Q(go_live__isnull=True) | Q(go_live__lte=now)
+    )
+
+
 def summary(user, pool=None):
     """Score/accuracy inputs for one user over all challenges or one pool."""
     params = {"user": user}
@@ -167,9 +175,19 @@ def summary(user, pool=None):
         redemptions = redemptions.filter(hint__challenge__in=question_scope.values("challenge"))
     deductions = redemptions.aggregate(total=Sum("hint__cost"))["total"] or 0
     last = submissions.filter(correct=True).aggregate(latest=Max("submitted_at"))["latest"]
+    # Total possible solves: every question of the currently visible
+    # challenges in scope (§4: all questions of a visible challenge count).
+    possible_scope = _visible_challenges_queryset()
+    if pool is not None:
+        possible_scope = possible_scope.filter(
+            pk__in=PoolChallenge.objects.filter(pool=pool).values("challenge")
+        )
+    possible = Question.objects.filter(challenge__in=possible_scope).count()
     return {
         "attempts": attempts,
         "correct": correct,
+        "possible": possible,
+        "completion": round(correct / possible * 100, 1) if possible else None,
         "earned": earned,
         "deductions": deductions,
         "points": earned - deductions,

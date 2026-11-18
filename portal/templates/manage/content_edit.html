@@ -5,9 +5,10 @@
 <h1>Edit / preview content</h1>
 <p class="muted small">Existing labs retain their pinned templates. Content edits use the data-revision guard.</p>
 <section class="panel">
+  <h2>Challenge</h2>
   <form method="post">
     {% csrf_token %}
-    {{ form.as_p }}
+    {% include "manage/_labeled_form.html" with form=form %}
     <button class="btn primary" type="submit">Save content</button>
   </form>
 </section>
@@ -19,12 +20,29 @@
       <p class="muted small">Question {{ forloop.counter }} · generation {{ question.generation }}</p>
       <form method="post" action="{% url 'manage-question-inline' question.id %}">
         {% csrf_token %}
-        {{ qform.as_p }}
+        {% include "manage/_labeled_form.html" with form=qform %}
         <button class="btn small" type="submit">Apply question edit</button>
       </form>
       <a class="btn small secondary" href="{% url 'manage-question-edit' question.id %}">Preview &amp; full editor</a>
     </div>
   {% empty %}<p>No questions.</p>{% endfor %}
+</section>
+
+<section class="panel">
+  <h2>Hints</h2>
+  {% for hint in challenge.hints.all %}
+    <div class="row">
+      <div><strong>{{ hint.description }}</strong>
+        <span class="muted small">{{ hint.cost }} pts · {{ hint.redemptions.count }} owner(s)</span></div>
+      <a class="btn small secondary" href="{% url 'manage-hint-edit' hint.id %}">Change price / edit</a>
+    </div>
+  {% empty %}<p>No hints yet.</p>{% endfor %}
+  <form method="post" action="{% url 'manage-hint-create' challenge.id %}" class="stack-form">
+    {% csrf_token %}
+    {% include "manage/_labeled_form.html" with form=hint_form %}
+    <button class="btn secondary" type="submit">Create hint</button>
+  </form>
+  <p class="muted small">Redeemed hints are refundable, never deletable; the current price applies to all owners retroactively.</p>
 </section>
 
 <section class="panel">

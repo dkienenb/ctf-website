@@ -54,26 +54,27 @@ class OperatorServiceTests(TestCase):
 
         response = self.client.get(reverse("manage"))
         self.assertEqual(response.status_code, 200)
+        # Only genuinely-awaiting pre-approvals are listed; entries with an
+        # account or a revocation drop out (the accounts panel covers the
+        # used ones; revoked ones are history).
         self.assertContains(response, "470000000000000001")
-        self.assertContains(response, "470000000000000002")
         self.assertContains(response, "awaiting first sign-in")
-        # Pre-approving an existing account upgrades it immediately, so the
-        # badge reads approved (there is no lingering "pending" state).
-        self.assertContains(response, "account: approved")
-        self.assertContains(response, "by Admin")  # the operator who pre-approved
+        self.assertNotContains(response, "account: approved")  # used → accounts panel
+        # The used/revoked IDs may still appear once (their ACCOUNT rows in
+        # the accounts panel) but never as pre-approval rows.
+        content = response.content.decode()
+        self.assertEqual(content.count("470000000000000002"), 1)
+        self.assertEqual(content.count("470000000000000003"), 1)
 
-    def test_dashboard_shows_revoked_preapprovals_as_revoked(self):
-        """A revoked pre-approval displays its true state — not a pending
-        row with a Revoke button (the owner spotted this live: a test row
-        looked 'awaiting first sign-in' after being revoked)."""
+    def test_dashboard_drops_revoked_preapprovals_from_the_list(self):
+        """Revoked pre-approvals are removed from the list entirely (they
+        remain in the append-only ledger; re-approving re-grants)."""
         self.client.force_login(self.admin)
         adminops.preapprove(self.admin, "470000000000000004")
         adminops.revoke_preapproval(self.admin, "470000000000000004")
         response = self.client.get(reverse("manage"))
-        self.assertContains(response, "470000000000000004")
-        self.assertContains(response, ">revoked</span>")
-        revoked_row = response.content.decode().split("470000000000000004", 1)[1]
-        self.assertNotIn("revoke-preapproval", revoked_row[:1200])  # no re-revoke button
+        self.assertNotContains(response, "470000000000000004")
+        self.assertContains(response, "No pre-approved IDs yet.")
 
     def test_dashboard_empty_preapproval_list(self):
         self.client.force_login(self.admin)
@@ -119,7 +120,7 @@ class OperatorServiceTests(TestCase):
                                              lifecycle=Challenge.Lifecycle.PUBLISHED)
         pool = Pool.objects.create(name="AP", slug="ap")
         response = self.client.post(reverse("manage-content-edit", args=[challenge.id]), {
-            "title": "Authored", "author": "New Credit", "summary": "", "description": "",
+            "title": "Authored", "author": "New Credit", "description": "",
             "pools": [pool.id], "lifecycle": "published",
             "revision": DataRevision.current(),
         })
@@ -222,25 +223,30 @@ class OperatorServiceTests(TestCase):
         response = self.client.post(reverse("manage-create-challenge"), {
             "title": "Labeled challenge", "pools": [pool.id],
             # Two questions; the third row is blank and must be skipped.
-            "questions-TOTAL_FORMS": "3", "questions-INITIAL_FORMS": "0",
+            # Question rows are text-only: prompt + answers, points default.
+            "questions-TOTAL_FORMS": "4", "questions-INITIAL_FORMS": "0",
             "questions-MIN_NUM_FORMS": "0", "questions-MAX_NUM_FORMS": "1000",
             "questions-0-prompt": "one plus one?",
             "questions-0-answers": "2\n  two ",   # whitespace lines are dropped
-            "questions-0-points": "50",
             "questions-1-prompt": "capital of France?",
             "questions-1-answers": "paris\nParis",
-            "questions-1-points": "10",
-            "questions-2-prompt": "",
-            "questions-2-answers": "",
+            "questions-2-prompt": "removed by its DELETE flag",
+            "questions-2-answers": "ignored",
+            "questions-2-DELETE": "on",
+            "questions-3-prompt": "",
+            "questions-3-answers": "",
         })
         self.assertEqual(response.status_code, 302)
         challenge = Challenge.objects.get(title="Labeled challenge")
         self.assertEqual(challenge.lifecycle, Challenge.Lifecycle.DRAFT)
         questions = list(challenge.questions.order_by("display_order"))
         self.assertEqual(len(questions), 2)
-        self.assertEqual([q.points for q in questions], [50, 10])
+        self.assertEqual([q.points for q in questions], [100, 100])  # default, text-only rows
         self.assertEqual(list(questions[0].accepted_answers.values_list("value", flat=True)), ["2", "two"])
         self.assertEqual(list(questions[1].accepted_answers.values_list("value", flat=True)), ["paris", "Paris"])
+        # The author field prefills the operator's display name on GET.
+        response = self.client.get(reverse("manage-create-challenge"))
+        self.assertContains(response, 'value="Admin"')
 
     def test_challenge_create_page_all_blank_questions_is_refused(self):
         self.client.force_login(self.admin)

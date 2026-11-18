@@ -11,4 +11,18 @@
   <p>An administrator must approve your Discord ID ({{ user.discord_id }}) before you can view challenges or rankings.</p>
 {% endif %}
 <p class="muted small">Authentication and approval are separate. Approval does not grant administrator rights.</p>
+{% if user.status == 'pending' %}
+<script>
+  // The waiting page auto-advances the moment the operator approves.
+  async function pollApproval() {
+    try {
+      const response = await fetch("{% url 'status-check' %}", {headers: {"Accept": "application/json"}});
+      if (!response.ok) return;
+      const data = await response.json();
+      if (data.approved) window.location.href = "/";
+    } catch (error) { /* offline; retry next cycle */ }
+  }
+  setInterval(pollApproval, 4000);
+</script>
+{% endif %}
 {% endblock %}

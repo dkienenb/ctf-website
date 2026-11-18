@@ -9,31 +9,18 @@
   {% csrf_token %}
   {{ form.management_form }}
   <section class="panel">
-    <h2>Challenge</h2>
-    {% for field in form %}
-      <div class="field">
-        <label for="{{ field.id_for_label }}">{{ field.label }}</label>
-        {{ field }}
-        {% if field.help_text %}<span class="muted small">{{ field.help_text }}</span>{% endif %}
-        {% for error in field.errors %}<span class="error">{{ error }}</span>{% endfor %}
-      </div>
-    {% endfor %}
-  </section>
+  <h2>Challenge</h2>
+  {% include "manage/_labeled_form.html" with form=form %}
+</section>
 
   <section class="panel">
     <h2>Questions</h2>
     {{ formset.management_form }}
     {% for row in formset %}
-      <div class="question-row field-group">
+      <div class="question-row field-group" data-row-prefix="{{ row.prefix }}">
         <p class="muted small">Question {{ forloop.counter }}</p>
-        {% for field in row %}
-          <div class="field">
-            <label for="{{ field.id_for_label }}">{{ field.label }}</label>
-            {{ field }}
-            {% if field.help_text %}<span class="muted small">{{ field.help_text }}</span>{% endif %}
-            {% for error in field.errors %}<span class="error">{{ error }}</span>{% endfor %}
-          </div>
-        {% endfor %}
+        {% include "manage/_labeled_form.html" with form=row %}
+        <label class="muted small">{{ row.DELETE }} Remove this question</label>
       </div>
     {% endfor %}
     <template id="question-template">{{ formset.empty_form }}</template>
@@ -48,8 +35,8 @@
   // Clone the empty_form template as a new numbered question row.
   document.getElementById("add-question").addEventListener("click", function () {
     const template = document.getElementById("question-template");
-    const rows = document.querySelectorAll(".question-row");
-    const next = rows.length;  // zero-based next index
+    const rows = document.querySelectorAll(".question-row:not([data-removed])");
+    const next = document.querySelectorAll(".question-row").length;  // next form index
     const node = template.content.firstElementChild.cloneNode(true);
     node.innerHTML = node.innerHTML.replaceAll("__prefix__", String(next));
     const label = document.createElement("p");
@@ -60,7 +47,9 @@
     node.classList.remove("field-group");
     rows[rows.length - 1].after(node);
     const total = document.querySelector('input[name="questions-TOTAL_FORMS"]');
-    total.value = String(next + 1);
+    total.value = String(Number(total.value) + 1);
   });
+  // Remove a row: check its DELETE box (Django formset semantics); the
+  // row's fields are then skipped on save.
 </script>
 {% endblock %}

@@ -45,7 +45,7 @@ def home(request, pool_slug=None):
             continue
         if pool_slug and not challenge.memberships.filter(pool__slug=pool_slug).exists():
             continue
-        if query and query.lower() not in (challenge.title + " " + challenge.summary).lower():
+        if query and query.lower() not in (challenge.title + " " + challenge.description).lower():
             continue
         solved_count = sum(1 for question in challenge.questions.all() if question.id in solved_ids)
         total = challenge.questions.count()

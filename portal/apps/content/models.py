@@ -39,7 +39,6 @@ class Challenge(models.Model):
 
     title = models.CharField(max_length=200)
     slug = models.SlugField(max_length=200, unique=True)
-    summary = models.CharField(max_length=300, blank=True)
     author = models.CharField(max_length=100, blank=True)  # display-only credit, operator-set
     description = models.TextField(blank=True)
     lifecycle = models.CharField(max_length=10, choices=Lifecycle.choices, default=Lifecycle.DRAFT)

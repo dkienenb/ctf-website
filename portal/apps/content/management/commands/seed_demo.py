@@ -33,7 +33,6 @@ LAB_TEMPLATE_DEFAULTS = {
 CHALLENGES = [
     {
         "slug": "hello-world", "title": "Hello, world.",
-        "summary": "Every journey starts with a discovery. Find your first flag.",
         "description": "A flag proves you found something. Read the field notes, then answer both questions. All questions are available immediately.",
         "pools": ["first-steps"],
         "attachment": ("welcome.txt", "FIELD NOTES / 001\nWelcome, explorer.\nYour first flag: CTF{hello_world}\nThe author signed this note: Ada\n"),
@@ -45,7 +44,6 @@ CHALLENGES = [
     },
     {
         "slug": "quiet-channel", "title": "A quiet channel",
-        "summary": "A transmission came through. The message is there, if you know how to read it.",
         "description": "Decode the captured transmission. This challenge belongs to two pools; each question and hint still counts only once in your overall score.",
         "pools": ["open-source", "first-steps"],
         "attachment": ("transmission.txt", "Encoding: Base64\nQ1RGe2xpc3Rlbl9jbG9zZWx5fQ==\n"),
@@ -57,7 +55,6 @@ CHALLENGES = [
     },
     {
         "slug": "open-door", "title": "The open door", "lab": True,
-        "summary": "An unfamiliar terminal. A forgotten note. Where will you look first?",
         "description": "Use the private Kali attacker workspace to investigate its paired target. Questions remain usable without starting a lab.",
         "pools": ["the-lab"],
         "questions": [
@@ -68,7 +65,6 @@ CHALLENGES = [
     },
     {
         "slug": "paper-trail", "title": "Paper trail",
-        "summary": "The story changed, but an old version did not quite disappear.",
         "description": "Compare the two release notes. The removed reference may be useful.",
         "pools": ["open-source"],
         "attachment": ("release-notes.txt", "VERSION 1.0\nInternal reference: CTF{nothing_is_ever_gone}\nVERSION 1.1\nInternal reference: [removed]\n"),
@@ -79,7 +75,6 @@ CHALLENGES = [
     },
     {
         "slug": "hidden-in-sight", "title": "Hidden in sight",
-        "summary": "Look a little closer. This one needs only an answer.",
         "description": "Question-only challenges are normal here. Read the prompt carefully; no files or machine are required.",
         "pools": ["first-steps"],
         "questions": [
@@ -89,7 +84,6 @@ CHALLENGES = [
     },
     {
         "slug": "after-hours", "title": "After hours", "lab": True,
-        "summary": "The last person out left a log. Pick up the trail.",
         "description": "Read the target activity log from your attacker workspace. Saving the lab preserves both guests in the production design.",
         "pools": ["the-lab", "open-source"],
         "questions": [
@@ -123,14 +117,12 @@ class Command(BaseCommand):
                     slug=definition["slug"],
                     defaults={
                         "title": definition["title"],
-                        "summary": definition["summary"],
                         "description": definition["description"],
                         "lifecycle": Challenge.Lifecycle.PUBLISHED,
                     },
                 )
                 if not created and update:
                     challenge.title = definition["title"]
-                    challenge.summary = definition["summary"]
                     challenge.description = definition["description"]
                     challenge.save()
                 if definition.get("lab"):

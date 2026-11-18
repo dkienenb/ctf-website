@@ -23,7 +23,7 @@
         <span>{{ row.points }} pts</span>
       </div>
       <h2><a href="{% url 'challenge_detail' row.challenge.slug %}">{{ row.challenge.title }}</a></h2>
-      <p>{{ row.challenge.summary }}</p>
+      <p>{{ row.challenge.description|truncatechars:140|default:"&nbsp;" }}</p>
       <div class="pool-links">
         {% for membership_pool in row.pools %}<a class="pool-link" href="{% url 'pool' membership_pool.slug %}">{{ membership_pool.name }}</a>{% endfor %}
       </div>

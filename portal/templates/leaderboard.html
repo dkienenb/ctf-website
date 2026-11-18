@@ -18,7 +18,7 @@
         <td>#{{ entry.rank }}</td>
         <td>{{ entry.name }}{% if entry.id == user.id %} <span class="badge">You</span>{% endif %}</td>
         <td>{% if entry.accuracy is None %}—{% else %}{{ entry.accuracy }}%{% endif %}</td>
-        <td>{{ entry.correct }}</td>
+        <td>{{ entry.correct }}/{{ entry.possible }}{% if entry.completion is not None %} ({{ entry.completion }}%){% endif %}</td>
         <td>{{ entry.points }}</td>
       </tr>
     {% endfor %}

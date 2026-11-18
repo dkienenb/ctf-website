@@ -142,7 +142,7 @@ class LifecycleTests(TestCase):
         future = tz.make_aware(tz.datetime(3000, 1, 1))
         adminops.edit_content(
             self.admin, challenge,
-            title=challenge.title, summary="", description="",
+            title=challenge.title, description="",
             pool_ids=[self._pool.id],
             expected_revision=DataRevision.current(),
             lifecycle=Challenge.Lifecycle.PUBLISHED, go_live=future,
@@ -156,7 +156,7 @@ class LifecycleTests(TestCase):
         # documented rule for operator edits (lifecycle is what changes).
         adminops.edit_content(
             self.admin, challenge,
-            title=challenge.title, summary="", description="",
+            title=challenge.title, description="",
             pool_ids=[self._pool.id],
             expected_revision=DataRevision.current(),
             lifecycle=Challenge.Lifecycle.PUBLISHED, go_live=None,
@@ -237,7 +237,7 @@ class ContentEditTests(TestCase):
 
     def _edit(self, **overrides):
         kwargs = {
-            "title": "Renamed", "summary": "s", "description": "d",
+            "title": "Renamed", "description": "d",
             "pool_ids": [self.pool_a.id], "expected_revision": DataRevision.current(),
         }
         kwargs.update(overrides)

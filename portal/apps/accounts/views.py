@@ -3,6 +3,7 @@ import json
 import urllib.request
 
 from django.contrib import messages
+from django.http import JsonResponse
 from django.shortcuts import redirect, render
 from django.views.decorators.http import require_http_methods
 
@@ -12,7 +13,19 @@ from .models import User
 def status_page(request):
     if not request.user.is_authenticated:
         return redirect("discord_login")
+    if request.user.status == User.Status.APPROVED:
+        return redirect("home")
     return render(request, "status.html")
+
+
+@require_http_methods(["GET"])
+def status_check(request):
+    """Lightweight poll for the waiting page: redirects the moment the
+    operator approves the account (no refresh needed)."""
+    if not request.user.is_authenticated:
+        return JsonResponse({"authenticated": False})
+    approved = request.user.status == User.Status.APPROVED
+    return JsonResponse({"authenticated": True, "approved": approved})
 
 
 def settings_page(request):
