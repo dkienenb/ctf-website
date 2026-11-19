@@ -114,6 +114,18 @@ QuestionFormSet = formset_factory(QuestionForm, extra=0, can_delete=True)
 
 
 @admin_page
+def submissions_page(request):
+    """All player submissions, newest first (operator visibility, §23)."""
+    from portal.apps.content.models import Challenge
+    from portal.apps.submissions.models import Submission
+
+    rows = (Submission.objects.select_related("user", "question", "question__challenge")
+            .order_by("-id")[:200])
+    challenges = Challenge.objects.order_by("title")
+    return render(request, "manage/submissions.html", {"rows": rows, "challenges": challenges})
+
+
+@admin_page
 def dashboard(request):
     def _preapproval_rows():
         """Only live pre-approvals: awaiting first sign-in. Entries with an

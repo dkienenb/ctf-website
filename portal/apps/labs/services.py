@@ -22,8 +22,11 @@ import base64
 import hashlib
 import re
 import secrets
+import shutil
 from datetime import timedelta
+from pathlib import Path
 
+from django.conf import settings
 from django.db import IntegrityError, transaction
 from django.utils import timezone
 
@@ -444,10 +447,25 @@ def validate_version(version):
         )
 
 
+def _validate_qcow2(disk_file):
+    """Allocation backs every guest disk as qcow2; verify the magic bytes so
+    an ISO (or anything else) never becomes a backing image."""
+    head = disk_file.read(4)
+    disk_file.seek(0)
+    if head != b"QFI\xfb":
+        raise ServiceError(
+            "The base disk must be a qcow2 image (got a different format). "
+            "ISOs boot from the template's cdrom device, not this file.", 400,
+        )
+
+
 def save_machine_image(actor, *, role, version, domain_xml, notes="", disk=None):
-    """Create or replace a machine image artifact. Replacing the disk file
-    invalidates the recorded hash; re-distribute before relying on it (§13:
-    no silent substitution — the explicit distribute action is the pin)."""
+    """Create a machine image, or update an existing one's metadata.
+
+    Published versions are IMMUTABLE (owner feedback): player disks use the
+    template files as backing images, so replacing a disk or changing the
+    domain.xml of an existing version would invalidate running labs. Changed
+    contents require a new version; notes stay editable."""
     from portal.apps.submissions.models import DataRevision
 
     if actor is None or not getattr(actor, "is_admin", False):
@@ -457,19 +475,32 @@ def save_machine_image(actor, *, role, version, domain_xml, notes="", disk=None)
     validate_version(version)
     validate_domain_xml(domain_xml or "", role)
 
+    existing = MachineImage.objects.filter(role=role, version=version).first()
+    if existing:
+        if disk is not None:
+            raise ServiceError(
+                "Versions are immutable: player disks back onto this template's file. "
+                "Create a new version for the changed contents.", 409,
+            )
+        if (domain_xml or "").strip() != existing.domain_xml.strip():
+            raise ServiceError(
+                "Versions are immutable: the domain.xml of an existing version cannot "
+                "change. Create a new version for the changed contents.", 409,
+            )
+
     with transaction.atomic():
         image, created = MachineImage.objects.select_for_update().get_or_create(
             role=role, version=version,
             defaults={"domain_xml": domain_xml, "notes": notes, "uploaded_by": actor},
         )
         if not created:
-            image.domain_xml = domain_xml
             if notes:
                 image.notes = notes
-        image.uploaded_by = actor
+            image.uploaded_by = actor
+            image.save(update_fields=("notes", "uploaded_by", "updated_at"))
+            return image, False
         if disk is not None:
-            if image.disk_file:
-                image.disk_file.delete(save=False)
+            _validate_qcow2(disk)
             image.disk_file.save(f"{role}-{version}-disk-template", disk, save=False)
             image.disk_file.open("rb")
             hasher = hashlib.sha256()
@@ -480,7 +511,7 @@ def save_machine_image(actor, *, role, version, domain_xml, notes="", disk=None)
             image.disk_size = image.disk_file.size
         image.save()
         DataRevision.bump()
-    return image, created
+    return image, True
 
 
 def delete_machine_image(actor, image_id):
@@ -508,9 +539,14 @@ def delete_machine_image(actor, image_id):
 
 
 def distribute_machine_image(actor, image_id):
-    """Stage a pinned image onto every workhorse via the durable command
-    queue (chunked template-put commands; op ids derive from the content
-    hash so retries and re-distributions are idempotent)."""
+    """Stage a pinned image onto every workhorse (Path A v2 transfer).
+
+    The command carries only instructions + hashes; the agent streams the
+    files from the controller over a token-authenticated GET
+    (template-fetch), so multi-gigabyte images never enter memory or the
+    command queue. Command identity includes role, version, and per-file
+    hashes, so two versions with identical content never collide and
+    re-distributions are idempotent."""
     from portal.apps.submissions.models import DataRevision
 
     if actor is None or not getattr(actor, "is_admin", False):
@@ -520,28 +556,23 @@ def distribute_machine_image(actor, image_id):
     except MachineImage.DoesNotExist:
         raise ServiceError("Machine image not found.", 404)
     if not image.disk_file:
-        raise ServiceError("This image has no base disk uploaded yet.", 409)
+        raise ServiceError("This version has no controller-side disk (upload it, or re-run capture with transfer).", 409)
+    if not image.domain_xml.strip():
+        raise ServiceError("This version has no domain.xml; complete the record before distributing.", 409)
     hosts = list(Host.objects.all())
     if not hosts:
         raise ServiceError("No workhorses are registered.", 409)
 
+    disk_sha = hashlib.sha256()
     image.disk_file.open("rb")
-    payload_hasher = hashlib.sha256()
-    chunks = []
-    while True:
-        block = image.disk_file.read(STAGE_CHUNK_BYTES)
-        if not block:
-            break
-        payload_hasher.update(block)
-        chunks.append(base64.b64encode(block).decode("ascii"))
+    for block in iter(lambda: image.disk_file.read(1024 * 1024), b""):
+        disk_sha.update(block)
     image.disk_file.close()
-    staged_sha = payload_hasher.hexdigest()
+    staged_sha = disk_sha.hexdigest()
     if staged_sha != image.disk_sha256:
         image.disk_sha256 = staged_sha
         image.save(update_fields=("disk_sha256",))
-
-    xml_bytes = image.domain_xml.encode("utf-8")
-    xml_sha = hashlib.sha256(xml_bytes).hexdigest()
+    xml_sha = hashlib.sha256(image.domain_xml.encode("utf-8")).hexdigest()
     issued = 0
 
     def stage(host, op_id, operation, payload):
@@ -559,26 +590,19 @@ def distribute_machine_image(actor, image_id):
         return command
 
     for host in hosts:
-        blob = base64.b64encode(xml_bytes).decode("ascii")
-        # The XML carries ITS OWN hash: the agent verifies every file against
-        # the sha of its own content, not the disk's (caught live: domain.xml
-        # was rejected on every transfer because it rode the disk's sha).
-        stage(host, f"tpl-{xml_sha[:16]}-{host.id}-domain",
-              "template-put", {
-                  "role": image.role, "version": image.version,
-                  "file": "domain.xml", "seq": 1, "total": 1,
-                  "data_b64": blob, "sha256": xml_sha,
+        stage(host, f"fetch-{image.role}-{image.version}-{xml_sha[:12]}-{host.id}-domain",
+              "template-fetch", {
+                  "role": image.role, "version": image.version, "file": "domain.xml",
+                  "sha256": xml_sha,
               })
         issued += 1
-        for seq, chunk in enumerate(chunks, start=1):
-            stage(host, f"tpl-{staged_sha[:16]}-{host.id}-disk-{seq}",
-                  "template-put", {
-                      "role": image.role, "version": image.version,
-                      "file": "disk-template", "seq": seq, "total": len(chunks),
-                      "data_b64": chunk, "sha256": staged_sha,
-                  })
-            issued += 1
-        stage(host, f"tpl-{staged_sha[:16]}-{xml_sha[:8]}-{host.id}-done",
+        stage(host, f"fetch-{image.role}-{image.version}-{staged_sha[:12]}-{host.id}-disk",
+              "template-fetch", {
+                  "role": image.role, "version": image.version, "file": "disk-template",
+                  "sha256": staged_sha, "size": image.disk_size,
+              })
+        issued += 1
+        stage(host, f"verify-{image.role}-{image.version}-{staged_sha[:12]}-{host.id}-done",
               "template-verify", {
                   "role": image.role, "version": image.version,
                   "sha256": staged_sha, "size": image.disk_size,
@@ -586,7 +610,7 @@ def distribute_machine_image(actor, image_id):
               })
         issued += 1
     DataRevision.bump()
-    return {"message": f"Staging {image.role}/{image.version} to {len(hosts)} workhorse(s) ({issued} commands).",
+    return {"message": f"Staging {image.role}/{image.version} to {len(hosts)} workhorse(s) ({issued} transfer instructions).",
             "hosts": len(hosts), "commands": issued}
 
 
@@ -658,7 +682,11 @@ def lab_template_clear(actor, challenge_id):
 # --- Interactive template building (§10) --------------------------------------
 
 def start_build(actor, *, host_id, role, version, base_version="", ssh_user="root"):
-    """Boot a scratch build VM on a workhorse (one build slot per host)."""
+    """Boot a scratch build VM on a workhorse (one build slot per host).
+
+    The host row is locked inside the transaction so two simultaneous
+    requests cannot both pass the slot check, and the version name is
+    reserved against active builds and existing images."""
     from portal.apps.submissions.models import DataRevision
     from .models import MachineBuild
 
@@ -668,19 +696,25 @@ def start_build(actor, *, host_id, role, version, base_version="", ssh_user="roo
         raise ServiceError("Role must be attacker or target.", 400)
     if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,79}", version or ""):
         raise ServiceError("Version must start with a letter or digit and use only letters, digits, dots, dashes, underscores.", 400)
-    if MachineImage.objects.filter(role=role, version=version).exists():
-        raise ServiceError("That version already exists; pick another name.", 409)
-    active = MachineBuild.objects.filter(
-        host_id=host_id, state__in=(MachineBuild.State.STARTING, MachineBuild.State.READY))
-    if active.exists():
-        raise ServiceError("This workhorse already has an active build. Capture or discard it first.", 409)
-    try:
-        host = Host.objects.get(pk=host_id, online=True)
-    except Host.DoesNotExist:
-        raise ServiceError("Host not found or offline.", 404)
-    if not host.admits:
-        raise ServiceError("This workhorse is not admitting new machines.", 409)
     with transaction.atomic():
+        if MachineImage.objects.filter(role=role, version=version).exists():
+            raise ServiceError("That version already exists; pick another name.", 409)
+        active = MachineBuild.objects.filter(
+            host_id=host_id,
+            state__in=(MachineBuild.State.STARTING, MachineBuild.State.READY,
+                       MachineBuild.State.CAPTURING, MachineBuild.State.DISCARDING,
+                       MachineBuild.State.FAILED),
+        )
+        if active.filter(version=version).exists():
+            raise ServiceError("An active build already reserves that version name.", 409)
+        if active.exists():
+            raise ServiceError("This workhorse already has an active build. Capture or discard it first.", 409)
+        try:
+            host = Host.objects.select_for_update().get(pk=host_id, online=True)
+        except Host.DoesNotExist:
+            raise ServiceError("Host not found or offline.", 404)
+        if not host.admits:
+            raise ServiceError("This workhorse is not admitting new machines.", 409)
         build = MachineBuild.objects.create(
             host=host, role=role, version=version, base_version=base_version,
             ssh_user=ssh_user or "root",
@@ -695,64 +729,112 @@ def start_build(actor, *, host_id, role, version, base_version="", ssh_user="roo
 
 
 def run_build_command(actor, build_id, *, script, ssh_password=""):
-    """Queue an operator-authored command batch into the running build guest."""
+    """Queue an operator-authored command batch into the running build guest.
+
+    The SSH password rides the durable command payload while the agent needs
+    it and is scrubbed from the stored payload once the result lands."""
     from .models import MachineBuild
 
     if actor is None or not getattr(actor, "is_admin", False):
         raise ServiceError("Administrator access is required.", 403)
-    build = MachineBuild.objects.get(pk=build_id)
-    if build.state != MachineBuild.State.READY:
-        raise ServiceError("The build guest is not ready (boot it first).", 409)
-    if not isinstance(script, str) or not script.strip():
-        raise ServiceError("The command batch is empty.")
-    command = HostCommand.objects.create(
-        op_id=f"build-{build.id}-exec-{secrets.token_hex(4)}", host=build.host,
-        operation="build-exec",
-        payload={"role": build.role, "script": script,
-                 "ssh_user": build.ssh_user, "ssh_password": ssh_password},
-        expected_generation=1,
-    )
+    with transaction.atomic():
+        build = MachineBuild.objects.select_for_update().get(pk=build_id)
+        if build.state != MachineBuild.State.READY:
+            raise ServiceError("The build guest is not ready (boot it first).", 409)
+        if not isinstance(script, str) or not script.strip():
+            raise ServiceError("The command batch is empty.")
+        command = HostCommand.objects.create(
+            op_id=f"build-{build.id}-exec-{secrets.token_hex(4)}", host=build.host,
+            operation="build-exec",
+            payload={"role": build.role, "script": script,
+                     "ssh_user": build.ssh_user, "ssh_password": ssh_password},
+            expected_generation=1,
+        )
     return command
 
 
 def capture_build(actor, build_id):
-    """Capture the customized build disk as a host-local template version."""
+    """Capture the customized build disk as a host-local template version.
+
+    Idempotent and explicitly tracked: a repeated click returns the existing
+    pending capture; the build enters CAPTURING so command batches and
+    discards cannot overlap a conversion."""
     from .models import MachineBuild
 
     if actor is None or not getattr(actor, "is_admin", False):
         raise ServiceError("Administrator access is required.", 403)
-    build = MachineBuild.objects.get(pk=build_id)
-    if build.state not in (MachineBuild.State.READY, MachineBuild.State.FAILED):
-        raise ServiceError("Only an active build can be captured.", 409)
-    command = HostCommand.objects.create(
-        op_id=f"build-{build.id}-capture", host=build.host,
-        operation="build-capture",
-        payload={"role": build.role, "version": build.version,
-                 "base_version": build.base_version},
-        expected_generation=1,
-    )
+    with transaction.atomic():
+        build = MachineBuild.objects.select_for_update().get(pk=build_id)
+        if build.state == MachineBuild.State.CAPTURING:
+            existing = HostCommand.objects.filter(
+                op_id=f"build-{build.id}-capture", host=build.host).first()
+            if existing and existing.status == HostCommand.Status.PENDING:
+                return existing  # same capture already queued
+        if build.state not in (MachineBuild.State.READY, MachineBuild.State.FAILED):
+            raise ServiceError("Only an active build can be captured.", 409)
+        last = build.last_output or {}
+        if last.get("failed") or (last.get("exit_code") not in (None, 0)):
+            raise ServiceError(
+                "The last command batch failed. Re-run it successfully (or discard) "
+                "before capturing — broken provisioning must not become a template.", 409,
+            )
+        command, created = HostCommand.objects.get_or_create(
+            op_id=f"build-{build.id}-capture", host=build.host,
+            defaults={
+                "operation": "build-capture",
+                "payload": {"role": build.role, "version": build.version,
+                            "base_version": build.base_version, "build_id": build.id},
+                "expected_generation": 1,
+            },
+        )
+        if not created and command.status == HostCommand.Status.FAILED:
+            command.status = HostCommand.Status.PENDING
+            command.result = {}
+            command.save(update_fields=("status", "result", "updated_at"))
+        build.state = MachineBuild.State.CAPTURING
+        build.save(update_fields=("state", "updated_at"))
     return command
 
 
 def discard_build(actor, build_id):
-    """Destroy the scratch build VM without capturing."""
+    """Destroy the scratch build VM without capturing (explicitly tracked)."""
     from .models import MachineBuild
 
     if actor is None or not getattr(actor, "is_admin", False):
         raise ServiceError("Administrator access is required.", 403)
-    build = MachineBuild.objects.get(pk=build_id)
-    if build.state not in (MachineBuild.State.STARTING, MachineBuild.State.READY, MachineBuild.State.FAILED):
-        raise ServiceError("Only an active build can be discarded.", 409)
-    command = HostCommand.objects.create(
-        op_id=f"build-{build.id}-discard", host=build.host,
-        operation="build-discard", payload={"role": build.role},
-        expected_generation=1,
-    )
+    with transaction.atomic():
+        build = MachineBuild.objects.select_for_update().get(pk=build_id)
+        if build.state == MachineBuild.State.DISCARDING:
+            existing = HostCommand.objects.filter(
+                op_id=f"build-{build.id}-discard", host=build.host).first()
+            if existing and existing.status == HostCommand.Status.PENDING:
+                return existing
+        if build.state not in (MachineBuild.State.STARTING, MachineBuild.State.READY,
+                               MachineBuild.State.FAILED):
+            raise ServiceError("Only an active build can be discarded.", 409)
+        command, created = HostCommand.objects.get_or_create(
+            op_id=f"build-{build.id}-discard", host=build.host,
+            defaults={
+                "operation": "build-discard", "payload": {"role": build.role},
+                "expected_generation": 1,
+            },
+        )
+        if not created and command.status == HostCommand.Status.FAILED:
+            command.status = HostCommand.Status.PENDING
+            command.result = {}
+            command.save(update_fields=("status", "result", "updated_at"))
+        build.state = MachineBuild.State.DISCARDING
+        build.save(update_fields=("state", "updated_at"))
     return command
 
 
 def _apply_build_result(command, ok):
-    """Fold a build command's result into the MachineBuild record."""
+    """Fold a build command's result into the MachineBuild record.
+
+    exec accuracy: a nonzero guest script exit is recorded as FAILED output
+    (the agent command itself succeeded — those are different things) and a
+    failed batch blocks capture. SSH passwords are scrubbed from the stored
+    payload once the result lands."""
     from .models import MachineBuild
 
     op_id = command.op_id
@@ -764,30 +846,106 @@ def _apply_build_result(command, ok):
     except MachineBuild.DoesNotExist:
         return
     detail = command.result or {}
+    if command.payload.get("ssh_password"):
+        command.payload = {k: v for k, v in command.payload.items() if k != "ssh_password"}
+        command.save(update_fields=("payload", "updated_at"))
     if command.operation == "build-start":
         build.state = MachineBuild.State.READY if ok else MachineBuild.State.FAILED
         build.vnc_port = detail.get("vnc_port", "") if ok else ""
     elif command.operation == "build-exec":
         build.guest_ip = detail.get("guest_ip", "") or build.guest_ip
-        build.last_output = {"exit_code": detail.get("exit_code"), "stdout": detail.get("stdout", ""),
-                             "stderr": detail.get("stderr", ""), "failed": not ok}
+        failed = (not ok) or (detail.get("exit_code") not in (0, None))
+        entry = {
+            "at": timezone.now().isoformat(),
+            "script": (command.payload.get("script") or "")[:400],
+            "exit_code": detail.get("exit_code"),
+            "stdout": detail.get("stdout", "")[:4000],
+            "stderr": (detail.get("stderr") or detail.get("error", ""))[:2000],
+            "failed": failed,
+        }
+        build.last_output = entry
+        build.history = ([entry] + list(build.history or []))[:12]
     elif command.operation == "build-capture":
         if ok:
             sha, size = detail.get("sha256", ""), detail.get("size", 0)
-            image, _ = MachineImage.objects.update_or_create(
+            image, created = MachineImage.objects.get_or_create(
                 role=build.role, version=build.version,
                 defaults={
                     "domain_xml": "", "disk_file": None,
                     "disk_sha256": sha, "disk_size": size,
                     "notes": f"Captured on {build.host.name} from base "
-                             f"{build.base_version or 'demo'} (host-local; upload the disk "
-                             "to distribute fleet-wide).",
-                    "uploaded_by": None,
+                             f"{build.base_version or 'demo'} (host-local until the agent "
+                             "transfers the files).",
                 },
             )
+            if not created and not image.disk_sha256:
+                image.disk_sha256, image.disk_size = sha, size
+                image.save(update_fields=("disk_sha256", "disk_size", "updated_at"))
+            # Never clobber an already-transferred file with host-local data.
             build.state = MachineBuild.State.CAPTURED
         else:
             build.state = MachineBuild.State.FAILED
     elif command.operation == "build-discard":
         build.state = MachineBuild.State.DISCARDED if ok else MachineBuild.State.FAILED
     build.save()
+
+
+def receive_build_artifact(build, *, file_name, seq, total, blob, sha, size):
+    """Assemble an agent-pushed capture artifact (chunked, verified) and
+    attach it to the build's MachineImage record — closing the manual
+    transfer gap: capture → upload → Distribute works without SSH."""
+    import base64 as base64_mod
+    import os as os_mod
+
+    staging_root = Path(settings.PRIVATE_TEMPLATES_DIR) / ".build-upload" / f"build-{build.id}"
+    staging_root.mkdir(parents=True, exist_ok=True)
+    chunk_name = f"{file_name}.part{seq:06d}"
+    (staging_root / chunk_name).write_bytes(blob)
+    parts = sorted(staging_root.glob(f"{file_name}.part*"))
+    if len(parts) < total:
+        return {"staged": f"{seq}/{total}", "complete": False}
+    if len(parts) > total:
+        shutil.rmtree(staging_root, ignore_errors=True)
+        raise ServiceError("Staging holds more chunks than the transfer declared.", 409)
+
+    assembled = staging_root / file_name
+    hasher = hashlib.sha256()
+    with assembled.open("wb") as out:
+        for part in parts:
+            with part.open("rb") as src:
+                shutil.copyfileobj(src, out, length=1024 * 1024)
+            with part.open("rb") as src:
+                for block in iter(lambda: src.read(1024 * 1024), b""):
+                    hasher.update(block)
+    if hasher.hexdigest() != sha:
+        shutil.rmtree(staging_root, ignore_errors=True)
+        raise ServiceError("Uploaded artifact failed sha256 verification.", 409)
+    for part in parts:
+        part.unlink()
+
+    if file_name == "domain.xml":
+        image, _ = MachineImage.objects.get_or_create(
+            role=build.role, version=build.version,
+            defaults={"notes": f"Captured on {build.host.name} from base {build.base_version or 'demo'}."},
+        )
+        image.domain_xml = assembled.read_text()
+        image.save(update_fields=("domain_xml", "updated_at"))
+        assembled.unlink()
+    else:
+        image, _ = MachineImage.objects.get_or_create(
+            role=build.role, version=build.version,
+            defaults={"notes": f"Captured on {build.host.name} from base {build.base_version or 'demo'}."},
+        )
+        if image.disk_file:
+            image.disk_file.delete(save=False)
+        image.disk_file.save(f"{build.role}-{build.version}-disk-template", assembled.open("rb"), save=False)
+        image.disk_sha256 = sha
+        image.disk_size = size or assembled.stat().st_size
+        image.save(update_fields=("disk_file", "disk_sha256", "disk_size", "updated_at"))
+        assembled.unlink()
+    # Remove notes claiming host-local once the controller holds the files.
+    if image.notes and "host-local" in image.notes:
+        image.notes = f"Captured on {build.host.name} from base {build.base_version or 'demo'}; transferred to the controller."
+        image.save(update_fields=("notes", "updated_at"))
+    shutil.rmtree(staging_root, ignore_errors=True)
+    return {"staged": f"{total}/{total}", "complete": True}

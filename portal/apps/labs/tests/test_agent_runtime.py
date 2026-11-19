@@ -202,6 +202,7 @@ class AgentRuntimeTests(TestCase):
         allowed = set(workhorse_agent.VOCABULARY)
         self.assertEqual(allowed, {
             "allocate", "save", "reset-target", "reset-full", "recover",
-            "refresh-lease", "template-put", "template-verify", "template-remove", "template-list",
+            "refresh-lease", "template-put", "template-fetch", "template-verify",
+            "template-remove", "template-list",
             "build-start", "build-status", "build-exec", "build-capture", "build-discard",
         })

@@ -33,11 +33,21 @@ class MachineImageForm(forms.Form):
 class BuildStartForm(forms.Form):
     host = forms.ModelChoiceField(queryset=Host.objects.filter(online=True), empty_label=None)
     role = forms.ChoiceField(choices=MachineImage.Role.choices)
-    base_version = forms.CharField(max_length=80, required=False,
-                                   help_text="Staged base to build from (empty = the demo pair on the workhorse).")
+    base_version = forms.ChoiceField(required=False, help_text="Staged base to build from (filtered by role; empty = the demo pair on the workhorse).")
     version = forms.CharField(max_length=80, help_text="The new template version you're creating.")
     ssh_user = forms.CharField(max_length=50, initial="root",
                                help_text="SSH user inside the guest (for command batches).")
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        images = MachineImage.objects.order_by("role", "version")
+        choices = [("", "Demo pair on the workhorse")]
+        for image in images:
+            choices.append((image.version, f"{image.get_role_display()} / {image.version}"))
+        self.fields["base_version"].choices = choices
+        self.fields["base_version"].widget.attrs.update({
+            "data-role-options": ",".join(f"{image.version}:{image.role}" for image in images),
+        })
 
 
 @admin_page

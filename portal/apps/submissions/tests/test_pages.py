@@ -8,6 +8,7 @@ from django.urls import reverse
 
 from portal.apps.accounts.models import User
 from portal.apps.content.models import Attachment, Challenge, Pool, PoolChallenge, Question, AcceptedAnswer, Hint
+from portal.apps.submissions import services
 from portal.apps.submissions.models import Solve, Submission
 
 from portal.apps.testutils import make_question, make_user  # reuse helpers
@@ -236,3 +237,24 @@ class AnswerRateLimitTests(TestCase):
             response = self.client.post(self.url, {"answer": "two", "request_id": uuid.uuid4().hex},
                                         HTTP_CF_CONNECTING_IP="198.51.100.8")
             self.assertEqual(response.status_code, 302)
+
+
+class SubmissionsAdminPageTests(TestCase):
+    """Admins see every player attempt (§23 visibility)."""
+
+    def setUp(self):
+        self.admin = make_user("990000000000000002", "Ops", is_admin=True)
+        self.player = make_user("990000000000000003", "Player")
+        self.question = make_question(["flag"], points=100)
+        services.submit(self.player, self.question.id, "guess", "req-sub-page-1")
+
+    def test_lists_all_submissions_for_admins(self):
+        self.client.force_login(self.admin)
+        response = self.client.get(reverse("manage-submissions"))
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "guess")
+        self.assertContains(response, "Player")
+
+    def test_non_admins_are_bounced(self):
+        self.client.force_login(self.player)
+        self.assertEqual(self.client.get(reverse("manage-submissions")).status_code, 302)

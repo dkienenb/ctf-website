@@ -5,8 +5,9 @@ restricted service — it may register heartbeats, fetch its own pending
 commands, and report results for commands assigned to it. Nothing else.
 """
 import hashlib
+import re
 
-from django.http import JsonResponse
+from django.http import FileResponse, JsonResponse
 from django.utils import timezone
 from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_http_methods
@@ -30,6 +31,88 @@ def _host_from_request(request):
 
 def _reject(message, status):
     return JsonResponse({"error": message}, status=status)
+
+
+@require_http_methods(["POST"])
+@csrf_exempt
+def build_artifact(request):
+    """Reverse transfer for interactive builds: the AGENT pushes captured
+    artifacts back to the controller, chunked (memory-light on both ends).
+
+    Token auth identifies the host; the payload identifies the build. Chunks
+    assemble under private storage staging, verify against the per-file
+    hash, and are attached to the build's MachineImage record (which the
+    command result may create independently — both paths are idempotent)."""
+    host = _host_from_request(request)
+    if host is None:
+        return _reject("Invalid agent credentials.", 401)
+    import base64
+    import hashlib
+    import json
+
+    try:
+        payload = json.loads(request.body or b"{}")
+    except json.JSONDecodeError:
+        return _reject("Invalid JSON body.", 400)
+    from .models import MachineBuild, MachineImage
+    from . import services
+
+    build = MachineBuild.objects.filter(host=host, pk=payload.get("build_id")).first()
+    if build is None:
+        return _reject("Unknown build for this host.", 404)
+    file_name = payload.get("file", "")
+    if file_name not in ("domain.xml", "disk-template"):
+        return _reject("Refusing artifact file (closed list).", 400)
+    sha = str(payload.get("sha256", ""))
+    if not re.fullmatch(r"[0-9a-f]{64}", sha):
+        return _reject("Artifact requires a 64-hex sha256.", 400)
+    try:
+        seq, total = int(payload.get("seq", 0)), int(payload.get("total", 0))
+    except (TypeError, ValueError):
+        return _reject("Bad chunk indexes.", 400)
+    if not 1 <= seq <= total:
+        return _reject("Chunk seq outside 1..total.", 400)
+    try:
+        blob = base64.b64decode(payload.get("data_b64", ""), validate=True)
+    except Exception:
+        return _reject("Bad base64 data.", 400)
+
+    try:
+        result = services.receive_build_artifact(
+            build, file_name=file_name, seq=seq, total=total, blob=blob, sha=sha,
+            size=int(payload.get("size", 0)),
+        )
+    except services.ServiceError as error:
+        return _reject(error.message, error.status)
+    return JsonResponse({"status": "ok", **result})
+
+@require_http_methods(["GET"])
+@csrf_exempt
+def template_artifact(request):
+    """Stream one staged template file to a workhorse (Path A v2 transfer).
+
+    Token auth (the fetching host); the file must exist on the controller —
+    host-local captures cannot be served until uploaded. Streaming FileResponse
+    keeps multi-gigabyte images out of memory."""
+    host = _host_from_request(request)
+    if host is None:
+        return _reject("Invalid agent credentials.", 401)
+    from .models import MachineImage
+
+    role = request.GET.get("role", "")
+    version = request.GET.get("version", "")
+    file_name = request.GET.get("file", "")
+    image = MachineImage.objects.filter(role=role, version=version).first()
+    if image is None:
+        return _reject("Unknown template version.", 404)
+    if file_name == "domain.xml":
+        from django.http import HttpResponse
+        return HttpResponse(image.domain_xml, content_type="application/xml")
+    if file_name == "disk-template":
+        if not image.disk_file:
+            return _reject("This version has no controller-side disk (host-local capture).", 409)
+        return FileResponse(image.disk_file.open("rb"), content_type="application/octet-stream")
+    return _reject("Refusing artifact file (closed list).", 400)
 
 
 @require_http_methods(["POST"])

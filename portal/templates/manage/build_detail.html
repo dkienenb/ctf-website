@@ -7,11 +7,11 @@
 
 <section class="panel">
   <h2>Console</h2>
-  {% if build.role == 'attacker' and build.state == 'ready' and build.vnc_port %}
+  {% if build.vnc_port and build.state == 'ready' %}
     <p><a class="btn primary" href="{% url 'manage-build-console' build.id %}" target="_blank" rel="noopener">Open build console ↗</a></p>
-    <p class="muted small">Streams the build guest's desktop (VNC port {{ build.vnc_port }}). Targets have no console — provision them over SSH below.</p>
+    <p class="muted small">Streams the build guest's desktop (VNC port {{ build.vnc_port }}) — target builds included.</p>
   {% else %}
-    <p class="muted small">Console available once an attacker-role build is ready.</p>
+    <p class="muted small">Console available once the build is ready.</p>
   {% endif %}
 </section>
 
@@ -30,8 +30,11 @@
     </div>
     <button class="btn primary" type="submit">Run batch</button>
   </form>
+  {% for entry in build.history %}
+    <p class="muted small">Batch at {{ entry.at|date:"H:i" }} — exit {{ entry.exit_code }}{% if entry.failed %} FAILED{% endif %}: <code>{{ entry.script|truncatechars:80 }}</code></p>
+  {% endfor %}
   {% if build.last_output %}
-    <p class="muted small">Last batch {% if build.last_output.failed %}FAILED{% endif %} (exit {{ build.last_output.exit_code }}):</p>
+    <p class="muted small">Last batch {% if build.last_output.failed %}<strong>FAILED</strong>{% endif %} (exit {{ build.last_output.exit_code }}):</p>
     <pre class="build-output">{{ build.last_output.stdout }}{% if build.last_output.stderr %}
 
 STDERR:
@@ -45,6 +48,10 @@ STDERR:
     <form method="post" action="{% url 'manage-build-action' build.id %}">{% csrf_token %}<input type="hidden" name="do" value="capture"><button class="btn primary" type="submit">Capture as template {{ build.role }}/{{ build.version }}</button></form>
     <form method="post" action="{% url 'manage-build-action' build.id %}">{% csrf_token %}<input type="hidden" name="do" value="discard"><button class="btn danger" type="submit">Discard build</button></form>
   </div>
-  <p class="muted small">Capture performs a graceful shutdown, compacts the disk, and writes the template onto {{ build.host.name }} (host-local — upload the disk file to distribute it fleet-wide).</p>
+  <p class="muted small">Capture performs a graceful shutdown, compacts the disk, and writes the template onto {{ build.host.name }}, then transfers the files back to the controller — ready to distribute.</p>
+  <p class="muted small">Build checklist: install what you need, enable sshd (or use the console), verify a clean reboot boots to a working system, then capture.</p>
 </section>
+{% if build.state == 'starting' %}
+<script>setInterval(function () { window.location.reload(); }, 5000);</script>
+{% endif %}
 {% endblock %}

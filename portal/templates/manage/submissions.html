@@ -1,0 +1,25 @@
+{% extends "base.html" %}
+{% block title %}Submissions — Administration{% endblock %}
+{% block content %}
+<p><a href="{% url 'manage' %}">← Back to administration</a></p>
+<h1>Submissions</h1>
+<p class="muted small">Every counted attempt, newest first (last {{ rows|length }}). Raw text is retained privately for audit; the comparison value is what was matched.</p>
+<section class="panel">
+  <table>
+    <thead><tr><th>When</th><th>Player</th><th>Challenge</th><th>Answer (comparison)</th><th>Correct</th><th>Counted</th></tr></thead>
+    <tbody>
+    {% for row in rows %}
+      <tr>
+        <td class="muted small">{{ row.submitted_at|date:"m-d H:i" }}</td>
+        <td>{{ row.user.cached_name|default:row.user.discord_id }}</td>
+        <td>{{ row.question.challenge.title }}</td>
+        <td><code>{{ row.answer|truncatechars:60 }}</code></td>
+        <td>{% if row.correct %}✓{% else %}—{% endif %}</td>
+        <td>{% if row.eligible %}yes{% else %}<span class="muted">excluded</span>{% endif %}</td>
+      </tr>
+    {% empty %}<tr><td colspan="6">No submissions yet.</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</section>
+{% endblock %}

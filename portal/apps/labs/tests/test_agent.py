@@ -506,3 +506,56 @@ class AgentExecutorTests(TestCase):
             self.assertTrue(any("ctf-lab9-tgt" in path for path in defines))   # target rebuilt
             started = [call[1] for call in executor.calls if call[0] == "start"]
             self.assertNotIn("ctf-lab9-atk", started)  # already running
+    def test_build_guest_ip_parses_virsh_lease_layout(self):
+        """Regression: virsh net-dhcp-leases puts Expiry in the second
+        column — the address appears later. Matched by VALUE now."""
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmp:
+            executor = self._executor(tmp)
+            lease_output = (
+                " Expiry time   MAC address        Protocol  IP address   Hostname  Client ID/Hostname\n"
+                "-------------------------------------------------------------------------------------\n"
+                " 2026-11-19 10:00:00  52:54:00:ab:cd:ef  ipv4   10.250.0.17/24  build-guest  -\n"
+            )
+            executor.probes["net-dhcp-leases"] = (0, lease_output)
+            self.assertEqual(executor._build_guest_ip(), "10.250.0.17")
+
+    def test_build_exec_maps_ssh_transport_failure(self):
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmp:
+            executor = self._executor(tmp)
+            executor.domain_state = lambda name: "running"
+            executor._build_guest_ip = lambda: "10.250.0.10"
+            executor._run_ssh = lambda *a, **k: (255, "", "Connection refused")
+            with self.assertRaises(workhorse_agent.AgentError) as error:
+                workhorse_agent.execute(executor, {
+                    "op_id": "e9", "operation": "build-exec",
+                    "payload": {"role": "attacker", "script": "ls", "ssh_user": "root"}})
+            self.assertIn("SSH connection failed", str(error.exception))
+            # A real script result passes through with script_ok.
+            executor._run_ssh = lambda *a, **k: (3, "partial", "")
+            detail = workhorse_agent.execute(executor, {
+                "op_id": "e10", "operation": "build-exec",
+                "payload": {"role": "attacker", "script": "exit 3", "ssh_user": "root"}})
+            self.assertEqual(detail["exit_code"], 3)
+            self.assertFalse(detail["script_ok"])
+
+    def test_build_start_injects_build_console_for_targets(self):
+        """Target templates have no VNC; the BUILD guest gets one injected so
+        the operator can watch provisioning. Captured XML keeps the base."""
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmp:
+            executor = self._executor(tmp)
+            (executor.images_dir / "target").mkdir(parents=True)
+            (executor.images_dir / "target" / "domain.xml").write_text(
+                "<domain><name>@NAME@</name><disk>@DISK@</disk><net>@LAB_NET@</net>"
+                "<devices></devices></domain>")
+            (executor.images_dir / "target" / "disk-template").write_bytes(b"base")
+            workhorse_agent.execute(executor, {
+                "op_id": "bt", "operation": "build-start",
+                "payload": {"role": "target", "version": "tgt-v1", "base_version": ""}})
+            xml = (executor.disks_dir / "ctf-build-target.xml").read_text()
+            self.assertIn("<graphics type='vnc' port='6911'", xml)  # injected

@@ -24,7 +24,10 @@ import shutil
 import subprocess
 import sys
 import time
+import queue
+import threading
 import urllib.error
+import urllib.parse
 import urllib.request
 from pathlib import Path
 import base64
@@ -246,6 +249,68 @@ class LibvirtExecutor:
         shutil.rmtree(staging, ignore_errors=True)
         return {"staged": f"{role}/{version}/{file_name}", "complete": True, "bytes": total_bytes}
 
+    def _publish_staged(self, role, version, file_name, staged_dir, expected_sha):
+        """Verify a staged file against its hash and move it into the
+        template directory atomically (the version dir appears complete or
+        not at all)."""
+        staged_file = staged_dir / file_name
+        hasher = hashlib.sha256()
+        with staged_file.open("rb") as src:
+            for block in iter(lambda: src.read(1024 * 1024), b""):
+                hasher.update(block)
+        if hasher.hexdigest() != expected_sha:
+            shutil.rmtree(staged_dir, ignore_errors=True)
+            raise AgentError(f"transferred {file_name} failed sha256 verification")
+        target_dir = self.template_dir(role, version)
+        target_dir.mkdir(parents=True, exist_ok=True)
+        os.replace(staged_file, target_dir / file_name)
+        shutil.rmtree(staged_dir, ignore_errors=True)
+        return target_dir / file_name
+
+    def template_fetch(self, command):
+        """Stream a staged template file from the controller (Path A v2).
+
+        The command carries only instructions + hashes — bytes flow over a
+        token-authenticated streaming GET, so multi-gigabyte images never
+        touch agent memory or the command queue. Idempotent: a target file
+        whose hash already matches is left untouched."""
+        payload = command["payload"]
+        role = self._check_name(payload.get("role", ""), "role")
+        if role not in self.ROLES:
+            raise AgentError(f"unknown template role: {role}")
+        version = self._check_name(payload.get("version", ""), "template version")
+        file_name = payload.get("file", "")
+        if file_name not in self.TEMPLATE_FILES:
+            raise AgentError(f"refusing template file: {file_name} (closed list)")
+        sha = str(payload.get("sha256", ""))
+        if not re.fullmatch(r"[0-9a-f]{64}", sha):
+            raise AgentError("template-fetch requires a 64-hex sha256")
+        base_url = payload.get("base_url") or getattr(self, "controller_base", "")
+        token = payload.get("token") or getattr(self, "controller_token", "")
+        if not base_url or not token:
+            raise AgentError("template-fetch requires the controller base URL and token")
+
+        target_dir = self.template_dir(role, version)
+        existing = target_dir / file_name
+        if existing.exists():
+            existing_sha = hashlib.sha256()
+            with existing.open("rb") as src:
+                for block in iter(lambda: src.read(1024 * 1024), b""):
+                    existing_sha.update(block)
+            if existing_sha.hexdigest() == sha:
+                return {"fetched": f"{role}/{version}/{file_name}", "already_present": True}
+
+        staging = self.disks_dir / self.STAGING_DIRNAME / f"fetch-{role}.{version}.{file_name}.{sha[:12]}"
+        staging.mkdir(parents=True, exist_ok=True)
+        client = ControllerClient({"controller_url": base_url, "token": token,
+                                   "host_name": payload.get("host_name", "")})
+        downloaded = client.download_artifact(role, version, file_name, sha, staging / file_name)
+        if not downloaded:
+            shutil.rmtree(staging, ignore_errors=True)
+            raise AgentError(f"controller does not hold {role}/{version}/{file_name} (host-local capture?)")
+        self._publish_staged(role, version, file_name, staging, sha)
+        return {"fetched": f"{role}/{version}/{file_name}"}
+
     def template_verify(self, command):
         """Prove a staged version matches what the controller pinned (§13):
         both the base disk and the pinned domain.xml, each against its own
@@ -326,7 +391,12 @@ class LibvirtExecutor:
         return self.disks_dir / f"{self.build_domain(role)}.qcow2"
 
     def build_start(self, command):
-        """Boot a scratch build VM from a staged base (or the demo pair)."""
+        """Boot a scratch build VM from a staged base (or the demo pair).
+
+        Target templates carry no VNC device (targets are never streamed to
+        players), but BUILD-time targets get one injected so the operator can
+        watch the provisioning. The captured template keeps the base XML
+        unchanged — the console device is build-time only."""
         payload = command["payload"]
         role = self._check_name(payload.get("role", ""), "role")
         if role not in self.ROLES:
@@ -346,7 +416,14 @@ class LibvirtExecutor:
         self._ensure_build_net()
         build_disk = self._build_disk(role)
         self._ensure_disk(build_disk, base_disk, payload)
-        xml = (base_xml.read_text()
+        xml_text = base_xml.read_text()
+        if "<graphics" not in xml_text:
+            # Build-time console for target templates (and any base lacking VNC).
+            xml_text = xml_text.replace(
+                "</devices>",
+                "  <graphics type='vnc' port='@VNC_PORT@' autoport='no' listen='127.0.0.1'/>\n  </devices>",
+            )
+        xml = (xml_text
                .replace("@NAME@", domain)
                .replace("@DISK@", str(build_disk))
                .replace("@VNC_PORT@", self.BUILD_VNC_PORT)
@@ -365,14 +442,20 @@ class LibvirtExecutor:
         return {"build": domain, "state": self.domain_state(domain), "guest_ip": ip}
 
     def _build_guest_ip(self):
-        """The build guest's DHCP lease on the build network ('' until up)."""
+        """The build guest's DHCP lease on the build network ('' until up).
+
+        virsh net-dhcp-leases columns: Expiry, MAC, Protocol, IP-address,
+        Hostname, Client-ID/Hostname — so the address is matched by VALUE,
+        not by column position (the positional parse returned the expiry
+        time and broke command batches)."""
         code, out = self.virsh_probe("net-dhcp-leases", self.BUILD_NET_NAME)
         if code != 0:
             return ""
+        ipv4 = re.compile(r"\b(\d{1,3}(?:\.\d{1,3}){3})\b")
         for line in out.splitlines():
-            parts = line.split()
-            if len(parts) >= 5 and parts[1].count(".") == 3:
-                return parts[1]
+            match = ipv4.search(line)
+            if match and not line.lower().startswith("expiry"):
+                return match.group(1)
         return ""
 
     def _run_ssh(self, guest_ip, ssh_user, password, script, timeout=300):
@@ -407,7 +490,17 @@ class LibvirtExecutor:
             exit_code, out, err = self._run_ssh(guest_ip, ssh_user, password, script)
         except subprocess.TimeoutExpired:
             raise AgentError("build-exec timed out (300s)")
-        return {"exit_code": exit_code, "stdout": out[:8000], "stderr": err[:4000], "guest_ip": guest_ip}
+        if exit_code == 255:
+            # ssh's own failure code: unreachable host, refused connection,
+            # auth failure — a transport problem, not a script result.
+            raise AgentError(
+                "SSH connection failed (is sshd running in the guest, and are the credentials right?)"
+            )
+        return {
+            "exit_code": exit_code,
+            "script_ok": exit_code == 0,
+            "stdout": out[:8000], "stderr": err[:4000], "guest_ip": guest_ip,
+        }
 
     def _compact_disk(self, source, destination):
         """Compact a build disk into a fresh template image (qemu-img convert)."""
@@ -429,9 +522,9 @@ class LibvirtExecutor:
     def build_capture(self, command):
         """Capture the customized build disk as a new versioned template.
 
-        The base template's domain.xml is copied UNCHANGED — placeholders
-        intact (§10) — while the customized disk becomes the new
-        disk-template. Sizing stays operator-set on the challenge pin."""
+        Conversion runs in the staging area and the destination is published
+        atomically AFTER verification — a failed conversion leaves no
+        half-built version directory behind, and a retry works."""
         payload = command["payload"]
         role = self._check_name(payload.get("role", ""), "role")
         if role not in self.ROLES:
@@ -443,27 +536,34 @@ class LibvirtExecutor:
         build_disk = self._build_disk(role)
         if not build_disk.exists():
             raise AgentError(f"build disk missing: {build_disk}")
-        self._graceful_shutdown(domain)
         target_dir = self.images_dir / role / version
         if target_dir.exists():
             raise AgentError(f"template version already exists: {role}/{version}")
-        target_dir.mkdir(parents=True)
+        self._graceful_shutdown(domain)
         base_xml = self.images_dir / role / "domain.xml"
         base_version = payload.get("base_version", "")
         if base_version:
             base_xml = self.template_dir(role, base_version) / "domain.xml"
         if not base_xml.exists():
             raise AgentError(f"base template xml missing: {base_xml}")
-        shutil.copy2(base_xml, target_dir / "domain.xml")
-        converted = target_dir / ".capturing"
-        self._compact_disk(build_disk, converted)
-        hasher = hashlib.sha256()
-        size = 0
-        with converted.open("rb") as src:
-            for block in iter(lambda: src.read(1024 * 1024), b""):
-                hasher.update(block)
-                size += len(block)
-        os.replace(converted, target_dir / "disk-template")
+        staging = self.disks_dir / self.STAGING_DIRNAME / f"capture-{role}.{version}"
+        staging.mkdir(parents=True, exist_ok=True)
+        try:
+            converted = staging / "disk-template"
+            self._compact_disk(build_disk, converted)
+            hasher = hashlib.sha256()
+            size = 0
+            with converted.open("rb") as src:
+                for block in iter(lambda: src.read(1024 * 1024), b""):
+                    hasher.update(block)
+                    size += len(block)
+            shutil.copy2(base_xml, staging / "domain.xml")
+            # Publish atomically: the version directory appears complete or
+            # not at all (a failed conversion leaves nothing behind).
+            os.replace(staging, target_dir)
+        except Exception:
+            shutil.rmtree(staging, ignore_errors=True)
+            raise
         self.virsh_tolerant("undefine", domain)
         build_disk.unlink(missing_ok=True)
         (self.disks_dir / f"{domain}.xml").unlink(missing_ok=True)
@@ -703,6 +803,7 @@ VOCABULARY = {
     "recover": lambda executor, command: executor.reset({**command, "scope": "target"}),
     "refresh-lease": lambda executor, command: {"acknowledged": command.get("acknowledged_deadline")},
     "template-put": lambda executor, command: executor.template_put(command),
+    "template-fetch": lambda executor, command: executor.template_fetch(command),
     "template-verify": lambda executor, command: executor.template_verify(command),
     "template-remove": lambda executor, command: executor.template_remove(command),
     "template-list": lambda executor, command: executor.template_inventory(),
@@ -748,6 +849,65 @@ class ControllerClient:
     def result(self, op_id, status, detail):
         return self.request(f"/agentapi/commands/{op_id}/result", {"status": status, "result": detail})
 
+    def upload_build_artifacts(self, build_id, role, version, files, disk_sha="", chunk_bytes=2 * 1024 * 1024):
+        """Push captured build artifacts back to the controller, chunked.
+
+        Keeps multi-gigabyte captures out of agent memory: each chunk is
+        read, base64-encoded, and POSTed immediately; the controller
+        assembles on disk and verifies against the capture hash."""
+        for file_name, path in files:
+            if not path.exists():
+                continue  # e.g. target templates may omit nothing; domain.xml always exists post-capture
+            file_sha = hashlib.sha256()
+            with path.open("rb") as src:
+                for block in iter(lambda: src.read(1024 * 1024), b""):
+                    file_sha.update(block)
+            file_sha = file_sha.hexdigest()
+            size = path.stat().st_size
+            total = max(1, -(-size // chunk_bytes))
+            with path.open("rb") as src:
+                seq = 0
+                while True:
+                    block = src.read(chunk_bytes)
+                    if not block:
+                        break
+                    seq += 1
+                    self.request("/agentapi/build-artifact", {
+                        "build_id": build_id, "role": role, "version": version,
+                        "file": file_name, "seq": seq, "total": total,
+                        "sha256": file_sha, "size": size,
+                        "data_b64": base64.b64encode(block).decode("ascii"),
+                    })
+
+    def download_artifact(self, role, version, file_name, sha256, destination):
+        """Stream one staged template file from the controller to destination.
+
+        Returns False when the controller reports it missing (already
+        present, or a host-local image without a controller-side file)."""
+        query = urllib.parse.urlencode({"role": role, "version": version, "file": file_name})
+        request = urllib.request.Request(
+            f"{self.base}/agentapi/template-artifact?{query}",
+            headers={"Authorization": f"Bearer {self.token}"},
+        )
+        try:
+            with urllib.request.urlopen(request, timeout=300) as response:
+                hasher = hashlib.sha256()
+                with destination.open("wb") as out:
+                    while True:
+                        block = response.read(1024 * 1024)
+                        if not block:
+                            break
+                        hasher.update(block)
+                        out.write(block)
+        except urllib.error.HTTPError as error:
+            if error.code in (404, 409):
+                return False
+            raise
+        if sha256 and hasher.hexdigest() != sha256:
+            destination.unlink(missing_ok=True)
+            raise AgentError(f"downloaded {file_name} failed sha256 verification")
+        return True
+
 
 def collect_resources(config, running_labs=0):
     # LibvirtExecutor's __init__ creates the disks directory (the images dir
@@ -774,8 +934,13 @@ def collect_resources(config, running_labs=0):
     }
 
 
-def run_once(client, executor, config, deadlines):
-    """One heartbeat/poll/deadline cycle. Returns handled command count."""
+def run_once(client, executor, config, deadlines, build_inline=False):
+    """One heartbeat/poll/deadline cycle. Returns handled command count.
+
+    Build operations run on a dedicated worker thread (build-exec batches
+    can run five minutes, disk conversion thirty) so heartbeats and
+    host-local lease enforcement keep flowing while they work. With
+    build_inline=True the caller executes them synchronously (tests)."""
     try:
         response = client.heartbeat(collect_resources(config, len(deadlines)))
         deadlines.update(response.get("lease_deadlines", {}))
@@ -790,15 +955,74 @@ def run_once(client, executor, config, deadlines):
         deadline = command.get("acknowledged_deadline")
         if deadline:
             deadlines[command["payload"].get("lab", command["op_id"])] = deadline
+        if command.get("operation", "").startswith("build-") and not build_inline:
+            BUILD_QUEUE.put((client, executor, command))
+            continue
         try:
             detail = execute(executor, command)
             client.result(command["op_id"], "ok", detail)
+            _post_build_side_effects(client, executor, command, detail)
         except Exception as error:  # report failures; never retry destructively
             print(f"agent: command {command['op_id'][:8]} failed: {error}", file=sys.stderr)
             client.result(command["op_id"], "failed", {"error": str(error)[:500]})
         handled += 1
     enforce_deadlines(client, executor, deadlines)
     return handled
+
+
+def _post_build_side_effects(client, executor, command, detail):
+    """After a successful capture, push the captured artifacts back to the
+    controller so the MachineImage record becomes fully distributed-able."""
+    if command.get("operation") != "build-capture" or not detail.get("captured"):
+        return
+    role = command["payload"].get("role", "")
+    version = command["payload"].get("version", "")
+    build_id = command["payload"].get("build_id")
+    if not build_id:
+        return  # older controller: capture stays host-local
+    directory = executor.template_dir(role, version)
+    try:
+        client.upload_build_artifacts(
+            build_id, role, version,
+            files=(
+                ("domain.xml", directory / "domain.xml"),
+                ("disk-template", directory / "disk-template"),
+            ),
+            disk_sha=detail.get("sha256", ""),
+        )
+        print(f"agent: captured {role}/{version} uploaded to controller", file=sys.stderr)
+    except Exception as error:
+        # The template is already staged on this host; the controller keeps
+        # the host-local record and the operator can re-capture or upload.
+        print(f"agent: artifact upload failed for {role}/{version}: {error}", file=sys.stderr)
+
+
+BUILD_QUEUE = queue.Queue()
+
+
+def build_worker(client, executor):
+    """Dedicated build-operation worker: long batches and disk conversion
+    never block the heartbeat/poll/lease-enforcement loop."""
+    while True:
+        command = BUILD_QUEUE.get()
+        if command is None:
+            return
+        _, _, _ = command
+        c, e, cmd = command
+        try:
+            detail = execute(e, cmd)
+            c.result(cmd["op_id"], "ok", detail)
+            _post_build_side_effects(c, e, cmd, detail)
+        except Exception as error:
+            print(f"agent: command {cmd['op_id'][:8]} failed: {error}", file=sys.stderr)
+            c.result(cmd["op_id"], "failed", {"error": str(error)[:500]})
+        BUILD_QUEUE.task_done()
+
+
+def ensure_build_worker(client, executor):
+    worker = threading.Thread(target=build_worker, args=(client, executor), daemon=True)
+    worker.start()
+    return worker
 
 
 def enforce_deadlines(client, executor, deadlines):
@@ -823,7 +1047,10 @@ def main():
     config = load_config()
     client = ControllerClient(config)
     executor = LibvirtExecutor(images_dir=config["images_dir"], disks_dir=config["disks_dir"])
+    executor.controller_base = client.base
+    executor.controller_token = client.token
     deadlines = {}
+    ensure_build_worker(client, executor)
     print(f"agent: host={config['host_name']} controller={client.base}")
     while True:
         run_once(client, executor, config, deadlines)

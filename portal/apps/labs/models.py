@@ -113,7 +113,9 @@ class MachineBuild(models.Model):
     class State(models.TextChoices):
         STARTING = "starting", "Booting"
         READY = "ready", "Ready (customize via console / SSH)"
+        CAPTURING = "capturing", "Capturing (conversion in progress)"
         CAPTURED = "captured", "Captured"
+        DISCARDING = "discarding", "Discarding"
         DISCARDED = "discarded", "Discarded"
         FAILED = "failed", "Failed"
 
@@ -126,6 +128,7 @@ class MachineBuild(models.Model):
     vnc_port = models.CharField(max_length=6, blank=True)
     guest_ip = models.CharField(max_length=45, blank=True)
     last_output = models.JSONField(default=dict, blank=True)
+    history = models.JSONField(default=list, blank=True)  # recent exec batches, newest first
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 

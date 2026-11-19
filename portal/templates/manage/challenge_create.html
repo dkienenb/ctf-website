@@ -20,7 +20,8 @@
       <div class="question-row field-group" data-row-prefix="{{ row.prefix }}">
         <p class="muted small">Question {{ forloop.counter }}</p>
         {% include "manage/_labeled_form.html" with form=row %}
-        <label class="muted small">{{ row.DELETE }} Remove this question</label>
+        <input type="hidden" name="{{ row.DELETE.html_name }}" {% if row.DELETE.value %}checked{% endif %}>
+        <button class="btn small danger" type="button" data-remove-row="{{ row.prefix }}">Remove this question</button>
       </div>
     {% endfor %}
     <template id="question-template">{{ formset.empty_form }}</template>
@@ -49,7 +50,16 @@
     const total = document.querySelector('input[name="questions-TOTAL_FORMS"]');
     total.value = String(Number(total.value) + 1);
   });
-  // Remove a row: check its DELETE box (Django formset semantics); the
-  // row's fields are then skipped on save.
+  // Remove a row: check its hidden DELETE box (Django formset semantics)
+  // and hide it; the row's fields are then skipped on save.
+  document.addEventListener("click", function (event) {
+    const button = event.target.closest("[data-remove-row]");
+    if (!button) return;
+    const row = button.closest(".question-row");
+    const checkbox = row.querySelector('input[name$="-DELETE"]');
+    if (checkbox) checkbox.value = "on";
+    row.style.display = "none";
+    row.setAttribute("data-removed", "true");
+  });
 </script>
 {% endblock %}

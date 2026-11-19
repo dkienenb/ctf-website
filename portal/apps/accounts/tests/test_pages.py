@@ -110,3 +110,23 @@ class ProfileRefreshTests(TestCase):
     def test_refresh_requires_authentication(self):
         self.client.logout()
         self.assertEqual(self.client.post(self.url).status_code, 302)
+
+
+class StatusCheckEndpointTests(TestCase):
+    def test_pending_user_gets_not_approved(self):
+        pending = make_user("991000000000000001", "Wait", status=User.Status.PENDING)
+        self.client.force_login(pending)
+        data = self.client.get(reverse("status-check")).json()
+        self.assertEqual(data, {"authenticated": True, "approved": False})
+
+    def test_approved_user_flips_the_flag(self):
+        approved = make_user("991000000000000002", "Now In")
+        self.client.force_login(approved)
+        self.assertEqual(self.client.get(reverse("status-check")).json()["approved"], True)
+
+    def test_approved_users_are_redirected_off_the_waiting_page(self):
+        approved = make_user("991000000000000003", "Done")
+        self.client.force_login(approved)
+        response = self.client.get(reverse("status"))
+        self.assertEqual(response.status_code, 302)
+        self.assertEqual(response.url, "/")

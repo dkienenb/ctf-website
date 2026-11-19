@@ -13,7 +13,9 @@ from django.urls import reverse
 
 from agent import agent as workhorse_agent
 from portal.apps.labs import services
+from django.core.files.uploadedfile import SimpleUploadedFile
 from portal.apps.testutils import complete, host_token, make_host, make_lab_challenge, make_user
+from portal.apps.accounts.models import User
 from portal.apps.labs.models import Host, HostCommand, LabInstance
 
 
@@ -181,3 +183,85 @@ class TemplateStagingSecurityTests(TestCase):
                        "payload": {"lab": 1, "attacker_version": "", "target_version": ""}, "lab": 1}
             detail = workhorse_agent.execute(executor, command)
             self.assertEqual(detail["domains"], ["ctf-lab1-atk", "ctf-lab1-tgt"])
+
+
+class AgentArtifactEndpointTests(TestCase):
+    """The Path-A v2 transfer: agents pull staged files from the controller
+    (token-authed streaming GET) and push captured builds back (chunked POST)."""
+
+    def setUp(self):
+        self.host = make_host("artifact-host")
+        self.token = host_token(self.host)
+
+    def test_template_artifact_requires_token(self):
+        response = self.client.get(reverse("agent-template-artifact"),
+                                   {"role": "target", "version": "v1", "file": "disk-template"})
+        self.assertEqual(response.status_code, 401)
+
+    def test_template_artifact_streams_domain_and_disk(self):
+        from portal.apps.labs.models import MachineImage
+        xml = ("<domain><name>@NAME@</name><disk>@DISK@</disk>"
+               "<vnc>@VNC_PORT@</vnc><net>@LAB_NET@</net></domain>")
+        image, _ = services.save_machine_image(
+            make_user("510000000000000001", "Op", is_admin=True, status=User.Status.APPROVED),
+            role="attacker", version="kali-stream", domain_xml=xml,
+            disk=SimpleUploadedFile("d", b"QFI\xfb\x00\x03streamed-disk-bytes"))
+        auth = {"HTTP_AUTHORIZATION": f"Bearer {self.token}"}
+        response = self.client.get(reverse("agent-template-artifact"),
+                                   {"role": "attacker", "version": "kali-stream", "file": "domain.xml"},
+                                   **auth)
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.content, xml.encode())
+        response = self.client.get(reverse("agent-template-artifact"),
+                                   {"role": "attacker", "version": "kali-stream", "file": "disk-template"},
+                                   **auth)
+        self.assertEqual(b"".join(response.streaming_content), b"QFI\xfb\x00\x03streamed-disk-bytes")
+        # Host-local capture (no controller file) is refused, never invented.
+        MachineImage.objects.create(role="target", version="local-only", domain_xml="<x/>")
+        response = self.client.get(reverse("agent-template-artifact"),
+                                   {"role": "target", "version": "local-only", "file": "disk-template"},
+                                   **auth)
+        self.assertEqual(response.status_code, 409)
+
+    def test_build_artifact_upload_assembles_verifies_and_attaches(self):
+        from portal.apps.labs.models import MachineBuild, MachineImage
+        from portal.apps.testutils import make_lab_challenge
+        admin = make_user("520000000000000001", "Op", is_admin=True, status=User.Status.APPROVED)
+        challenge = make_lab_challenge()
+        services.request_lab(admin, challenge.id)
+        lab = LabInstance.objects.get(user=admin, challenge=challenge)
+        build = MachineBuild.objects.create(host=self.host, role="attacker",
+                                            version="kali-up", base_version="")
+        import base64 as b64
+        import hashlib as _h
+        content = b"QFI\xfb\x00\x03captured-disk"
+        sha = _h.sha256(content).hexdigest()
+        auth = {"HTTP_AUTHORIZATION": f"Bearer {self.token}"}
+        response = self.client.post(reverse("agent-build-artifact"), data=json.dumps({
+            "build_id": build.id, "role": "attacker", "version": "kali-up",
+            "file": "disk-template", "seq": 1, "total": 1, "sha256": sha,
+            "size": len(content), "data_b64": b64.b64encode(content).decode(),
+        }), content_type="application/json", **auth)
+        self.assertEqual(response.status_code, 200)
+        image = MachineImage.objects.get(role="attacker", version="kali-up")
+        self.assertTrue(image.disk_file)
+        self.assertEqual(image.disk_sha256, sha)
+        # Tampered chunk is refused wholesale.
+        bad = self.client.post(reverse("agent-build-artifact"), data=json.dumps({
+            "build_id": build.id, "role": "attacker", "version": "kali-bad",
+            "file": "disk-template", "seq": 1, "total": 1, "sha256": "0" * 64,
+            "size": 4, "data_b64": b64.b64encode(b"QFI\xfbdata").decode(),
+        }), content_type="application/json", **auth)
+        self.assertEqual(bad.status_code, 409)
+        self.assertFalse(MachineImage.objects.filter(version="kali-bad").exists())
+
+    def test_build_artifact_rejects_foreign_host_and_files(self):
+        other = make_host("artifact-host-2")
+        other_token = host_token(other)
+        auth = {"HTTP_AUTHORIZATION": f"Bearer {other_token}"}
+        response = self.client.post(reverse("agent-build-artifact"), data=json.dumps({
+            "build_id": 99999, "role": "attacker", "version": "x",
+            "file": "disk-template", "seq": 1, "total": 1, "sha256": "0" * 64,
+            "size": 1, "data_b64": "aGk=",
+        }), content_type="application/json", **auth)
+        self.assertEqual(response.status_code, 404)
