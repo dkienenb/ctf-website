@@ -277,7 +277,14 @@ def apply_question_edit(actor, question, *, answers, points, mode, prompt=None,
                 existing.delete()
 
         for user_id in users:
-            Notification.objects.create(recipient_id=user_id, message=MODE_MESSAGES[mode])
+            Notification.objects.create(
+                recipient_id=user_id,
+                message=(
+                    f"{MODE_MESSAGES[mode]}: '{question.prompt[:120]}' "
+                    f"in challenge '{question.challenge.title[:120]}'. "
+                    "Your progress and scores were recalculated."
+                ),
+            )
 
         AuditEvent.objects.create(
             actor=actor,

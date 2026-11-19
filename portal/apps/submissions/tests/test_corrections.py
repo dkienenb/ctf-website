@@ -73,19 +73,19 @@ class CorrectionRuleTests(TestCase):
 
         _edit(question, ["Ada"], mode="incorrect")
         self.assertEqual(len(_active(question)), 1)
-        self.assertTrue(Notification.objects.filter(recipient=self.user, message="Question updated").exists())
+        self.assertTrue(Notification.objects.filter(recipient=self.user, message__startswith="Question updated").exists())
 
         # Deliberately cleared incorrect history is never resurrected.
         _edit(question, ["wrong", "Ada"])
         self.assertEqual(len(_active(question)), 1)
-        self.assertTrue(Notification.objects.filter(recipient=self.user, message="Question corrected").exists())
+        self.assertTrue(Notification.objects.filter(recipient=self.user, message__startswith="Question corrected").exists())
 
         _edit(question, ["Ada"], mode="all")
         self.assertEqual(len(_active(question)), 0)
         question.refresh_from_db()
         self.assertEqual(question.generation, 1)
         self.assertFalse(Solve.objects.filter(user=self.user, question=question).exists())
-        self.assertTrue(Notification.objects.filter(recipient=self.user, message="Question replaced").exists())
+        self.assertTrue(Notification.objects.filter(recipient=self.user, message__startswith="Question replaced").exists())
 
         # The old generation never reappears.
         _edit(question, ["Ada", "wrong"])
@@ -172,3 +172,50 @@ class CorrectionRuleTests(TestCase):
         values = list(AcceptedAnswer.objects.filter(question=question).values_list("value", "active"))
         self.assertIn(("A", False), values)
         self.assertIn(("Ada", True), values)
+
+
+class CorrectionMessageContextTests(TestCase):
+    """Owner feedback: correction notifications must name the challenge and
+    the question, not just the edit mode."""
+
+class CorrectionMessageContextTests(TestCase):
+    """Owner feedback: correction notifications must name the challenge and
+    the question, not just the edit mode."""
+
+    def setUp(self):
+        self.admin = make_user("960000000000000072", "Editor", is_admin=True)
+        self.user = make_user("960000000000000071", "Notified")
+        self.question = make_question(["flag"], points=100)
+        DataRevision.current()
+
+    def _edit(self, mode):
+        services.submit(self.user, self.question.id, "flag", f"req-correction-{mode}-0001")
+        corrections.apply_question_edit(
+            self.admin,
+            self.question, answers=["flag"], points=50, mode=mode,
+            prompt=self.question.prompt, display_order=self.question.display_order,
+            reason="context test", expected_revision=DataRevision.current(),
+        )
+        return Notification.objects.get(recipient=self.user).message
+
+    def test_notification_names_challenge_and_question(self):
+        message = self._edit("none")
+        self.assertIn("Question corrected", message)
+        self.assertIn(self.question.challenge.title, message)
+        self.assertIn(self.question.prompt, message)
+
+    def test_notification_prefix_still_carry_the_mode(self):
+        for index, (mode, phrase) in enumerate(
+            (("incorrect", "Question updated"), ("all", "Question replaced"))
+        ):
+            user = make_user(f"96000000000000009{index}", f"ModeTest{index}")
+            services.submit(user, self.question.id, "wrong", f"req-correction-{mode}-0001")
+            corrections.apply_question_edit(
+                self.admin,
+                self.question, answers=["flag"], points=50, mode=mode,
+                prompt=self.question.prompt, display_order=self.question.display_order,
+                reason="context test", expected_revision=DataRevision.current(),
+            )
+            message = Notification.objects.get(recipient=user).message
+            self.assertTrue(message.startswith(phrase), message)
+            self.assertIn(self.question.challenge.title, message)
