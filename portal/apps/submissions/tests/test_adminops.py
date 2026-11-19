@@ -76,6 +76,25 @@ class OperatorServiceTests(TestCase):
         self.assertNotContains(response, "470000000000000004")
         self.assertContains(response, "No pre-approved IDs yet.")
 
+    def test_dashboard_deduplicates_double_preapprovals(self):
+        """Pre-approving the same ID twice yields ONE awaiting row."""
+        self.client.force_login(self.admin)
+        adminops.preapprove(self.admin, "470000000000000005")
+        adminops.preapprove(self.admin, "470000000000000005")
+        response = self.client.get(reverse("manage"))
+        content = response.content.decode()
+        # The row renders the ID twice (title + revoke target) — but only once.
+        self.assertEqual(content.count("470000000000000005"), 2)
+        self.assertEqual(content.count("<strong>470000000000000005</strong>"), 1)
+
+    def test_leaderboard_completion_none_when_no_visible_challenges(self):
+        from portal.apps.submissions import services
+        Challenge.objects.filter(lifecycle=Challenge.Lifecycle.PUBLISHED).delete()
+        rows = services.leaderboard()
+        for row in rows:
+            self.assertIsNone(row["completion"])
+            self.assertEqual(row["possible"], 0)
+
     def test_dashboard_empty_preapproval_list(self):
         self.client.force_login(self.admin)
         self.assertContains(self.client.get(reverse("manage")), "No pre-approved IDs yet.")

@@ -477,12 +477,18 @@ def save_machine_image(actor, *, role, version, domain_xml, notes="", disk=None)
 
     existing = MachineImage.objects.filter(role=role, version=version).first()
     if existing:
-        if disk is not None:
+        incomplete = not existing.disk_file  # no backing disk: cannot distribute
+        if disk is not None and not incomplete:
             raise ServiceError(
                 "Versions are immutable: player disks back onto this template's file. "
                 "Create a new version for the changed contents.", 409,
             )
-        if (domain_xml or "").strip() != existing.domain_xml.strip():
+        if disk is None and incomplete:
+            raise ServiceError(
+                "This version has no backing disk yet (host-local capture or missed "
+                "upload): upload its qcow2 disk to complete the record.", 409,
+            )
+        if (domain_xml or "").strip() != existing.domain_xml.strip() and not incomplete:
             raise ServiceError(
                 "Versions are immutable: the domain.xml of an existing version cannot "
                 "change. Create a new version for the changed contents.", 409,
@@ -497,7 +503,23 @@ def save_machine_image(actor, *, role, version, domain_xml, notes="", disk=None)
             if notes:
                 image.notes = notes
             image.uploaded_by = actor
-            image.save(update_fields=("notes", "uploaded_by", "updated_at"))
+            if disk is not None:
+                # Completing a record without a backing disk (host-local
+                # capture with a failed transfer, or an upload that missed
+                # its file): first usable disk, and the domain_xml arrives
+                # with it.
+                _validate_qcow2(disk)
+                image.domain_xml = domain_xml
+                image.disk_file.save(f"{role}-{version}-disk-template", disk, save=False)
+                image.disk_file.open("rb")
+                hasher = hashlib.sha256()
+                for block in iter(lambda: image.disk_file.read(1024 * 1024), b""):
+                    hasher.update(block)
+                image.disk_file.close()
+                image.disk_sha256 = hasher.hexdigest()
+                image.disk_size = image.disk_file.size
+            image.save(update_fields=("notes", "uploaded_by", "disk_file",
+                                      "disk_sha256", "disk_size", "updated_at"))
             return image, False
         if disk is not None:
             _validate_qcow2(disk)
@@ -512,7 +534,6 @@ def save_machine_image(actor, *, role, version, domain_xml, notes="", disk=None)
         image.save()
         DataRevision.bump()
     return image, True
-
 
 def delete_machine_image(actor, image_id):
     from portal.apps.submissions.models import DataRevision

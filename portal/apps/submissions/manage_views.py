@@ -132,7 +132,12 @@ def dashboard(request):
         account or a revocation are dropped from the list (the accounts
         panel and the ledger history cover them)."""
         rows = []
-        for decision in ApprovalDecision.objects.filter(decision="preapprove").order_by("-id")[:20]:
+        seen_ids = set()
+        for decision in ApprovalDecision.objects.filter(decision="preapprove").order_by("-id")[:60]:
+            # One row per ID even after a double pre-approval.
+            if decision.discord_id in seen_ids:
+                continue
+            seen_ids.add(decision.discord_id)
             if User.objects.filter(discord_id=decision.discord_id).exists():
                 continue  # already used: the accounts panel shows the account
             latest = ApprovalDecision.objects.filter(

@@ -4,6 +4,7 @@ Replaces the interim JSON API (handoff §14: server-rendered templates). Forms
 carry real CSRF tokens; feedback flows through the messages framework.
 """
 import uuid
+import time
 
 from django.conf import settings
 from django.contrib import messages
@@ -30,16 +31,21 @@ def _client_ip(request):
 
 def _rate_limited(request, scope, limit, window_seconds):
     """Simple fixed-window counter for production-only flood control.
-    Skipped entirely when DEBUG (single-operator dev mode)."""
+    Skipped entirely when DEBUG (single-operator dev mode).
+
+    The window key is time-bucketed so it expires naturally: a sustained
+    abuser is blocked for each window instead of being locked out forever
+    (a sliding refresh would never let the counter age out)."""
     if getattr(settings, "DEBUG", False):
         return False
     ip = _client_ip(request)
     if not ip:
         return False
-    key = f"ratelimit:{scope}:{ip}"
+    window = int(time.time()) // window_seconds
+    key = f"ratelimit:{scope}:{ip}:{window}"
     try:
         current = cache.get_or_set(key, 0, timeout=window_seconds) + 1
-        cache.set(key, current, timeout=window_seconds)
+        cache.set(key, current, timeout=window_seconds + 5)
     except Exception:
         return False  # cache unavailable: fail open, never lock players out
     return current > limit

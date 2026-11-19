@@ -501,3 +501,74 @@ class BuildLifecycleHardeningTests(TestCase):
                 self.admin, role="attacker", version="kali-iso", domain_xml=DOMAIN_XML,
                 disk=SimpleUploadedFile("d", b"CD001" + b"\x00" * 16))
         self.assertIn("qcow2", error.exception.message)
+
+
+class BuildEdgeCaseTests(TestCase):
+    """Second feedback round edge cases: incomplete-capture completion,
+    duplicate version-name races, artifact chunk ordering."""
+
+    def setUp(self):
+        self.admin = make_admin("540000000000000001")
+        self.user = make_user("540000000000000002", "Player")
+
+    def test_incomplete_host_local_capture_can_be_completed(self):
+        """A host-local capture whose agent transfer failed is not wedged:
+        uploading the disk + domain_xml completes the record; the completed
+        version is then immutable again. (Created exactly as
+        _apply_build_result creates it: empty domain_xml, no disk.)"""
+        from portal.apps.labs.models import MachineImage
+        challenge = Challenge.objects.create(title="Inc", slug="inc")
+        services.lab_template_save(self.admin, challenge.id, attacker_version="",
+                                   target_version="", attacker_ram_mb=2048, attacker_vcpu=1,
+                                   attacker_disk_gb=20, target_ram_mb=1024, target_vcpu=1,
+                                   target_disk_gb=10)
+        image = MachineImage.objects.create(role="attacker", version="kali-inc",
+                                            domain_xml="")  # host-local, transfer failed
+        with self.assertRaises(ServiceError) as error:
+            services.save_machine_image(self.admin, role="attacker", version="kali-inc",
+                                        domain_xml=DOMAIN_XML)  # no disk again → refused
+        self.assertIn("no backing disk", error.exception.message)
+        image2, created = services.save_machine_image(
+            self.admin, role="attacker", version="kali-inc",
+            domain_xml=DOMAIN_XML, disk=qcow2_file(b"completed-disk"))
+        self.assertFalse(created)
+        self.assertTrue(image2.disk_file)
+        self.assertEqual(image2.disk_sha256,
+                         hashlib.sha256(b"QFI\xfb\x00\x03" + b"completed-disk").hexdigest())
+        self.assertEqual(image2.domain_xml, DOMAIN_XML)
+        # Now it behaves like any completed version: immutable.
+        with self.assertRaises(ServiceError):
+            services.save_machine_image(self.admin, role="attacker", version="kali-inc",
+                                        domain_xml=DOMAIN_XML, disk=qcow2_file(b"swap"))
+
+    def test_incomplete_capture_completion_validates_qcow2(self):
+        from portal.apps.labs.models import MachineImage
+        MachineImage.objects.create(role="target", version="t-inc", domain_xml="")
+        with self.assertRaises(ServiceError) as error:
+            services.save_machine_image(self.admin, role="target", version="t-inc",
+                                        domain_xml=DOMAIN_XML,
+                                        disk=SimpleUploadedFile("d", b"CD001" + b"\x00" * 8))
+        self.assertIn("qcow2", error.exception.message)
+
+    def test_build_artifact_out_of_order_chunks(self):
+        from portal.apps.labs.models import MachineBuild
+        host = make_host("order-host")
+        build = MachineBuild.objects.create(host=host, role="target",
+                                            version="kali-ooo", base_version="")
+        import base64 as b64
+        content = b"QFI\xfb\x00\x03half-one-half-two"
+        half = len(content) // 2
+        sha = hashlib.sha256(content).hexdigest()
+        # Chunk 2 lands FIRST, chunk 1 completes the transfer.
+        r2 = services.receive_build_artifact(build, file_name="disk-template",
+                                             seq=2, total=2,
+                                             blob=content[half:], sha=sha, size=len(content))
+        self.assertFalse(r2["complete"])
+        r1 = services.receive_build_artifact(build, file_name="disk-template",
+                                             seq=1, total=2,
+                                             blob=content[:half], sha=sha, size=len(content))
+        self.assertTrue(r1["complete"])
+        image = MachineImage.objects.get(role="target", version="kali-ooo")
+        image.disk_file.open("rb")
+        self.assertEqual(image.disk_file.read(), content)
+        image.disk_file.close()
