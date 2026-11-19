@@ -503,10 +503,14 @@ class LibvirtExecutor:
         }
 
     def _compact_disk(self, source, destination):
-        """Compact a build disk into a fresh template image (qemu-img convert)."""
+        """Compact a build disk into a fresh template image.
+
+        -O qcow2 -c: compressed clusters — an installed system typically
+        shrinks 3–5×. qemu decompresses transparently at boot, so nothing
+        downstream (allocation, backing files, streaming transfer) changes."""
         result = subprocess.run(
-            ["qemu-img", "convert", "-O", "qcow2", str(source), str(destination)],
-            capture_output=True, text=True, timeout=1800, check=True,
+            ["qemu-img", "convert", "-O", "qcow2", "-c", str(source), str(destination)],
+            capture_output=True, text=True, timeout=3600, check=True,
         )
         return result
 

@@ -48,7 +48,7 @@ STDERR:
     <form method="post" action="{% url 'manage-build-action' build.id %}">{% csrf_token %}<input type="hidden" name="do" value="capture"><button class="btn primary" type="submit">Capture as template {{ build.role }}/{{ build.version }}</button></form>
     <form method="post" action="{% url 'manage-build-action' build.id %}">{% csrf_token %}<input type="hidden" name="do" value="discard"><button class="btn danger" type="submit">Discard build</button></form>
   </div>
-  <p class="muted small">Capture performs a graceful shutdown, compacts the disk, and writes the template onto {{ build.host.name }}, then transfers the files back to the controller — ready to distribute.</p>
+  <p class="muted small">Capture performs a graceful shutdown, compacts <em>and compresses</em> the disk (typically 3–5× smaller), writes the template onto {{ build.host.name }}, then transfers the files back to the controller — ready to distribute. Compressed qcow2 boots natively; nothing downstream changes.</p>
   <p class="muted small">Build checklist: install what you need, enable sshd (or use the console), verify a clean reboot boots to a working system, then capture.</p>
 </section>
 {% if build.state == 'starting' %}
