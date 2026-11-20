@@ -37,11 +37,23 @@ class QuestionEditForm(forms.Form):
         return [line.strip() for line in self.cleaned_data["answers"].splitlines() if line.strip()]
 
 
+class HintCreateForm(forms.Form):
+    """Hint creation from the challenge editor: no audit reason needed —
+    the creation event itself is the audit record."""
+
+    cost = forms.IntegerField(min_value=0, initial=50,
+                              help_text="Deducted once, at redemption time.")
+    description = forms.CharField(max_length=500,
+                                  help_text="Shown to players before they buy.")
+    text = forms.CharField(max_length=4096, widget=forms.Textarea(attrs={"rows": 3}),
+                           help_text="Protected content, revealed after redemption.")
+
+
 class HintEditForm(forms.Form):
     cost = forms.IntegerField(min_value=0)
     description = forms.CharField(max_length=500)
     text = forms.CharField(max_length=4096, widget=forms.Textarea(attrs={"rows": 3}))
-    reason = forms.CharField(max_length=500)
+    reason = forms.CharField(max_length=500, label="Audit reason")
 
 
 class ContentEditForm(forms.Form):
@@ -364,7 +376,7 @@ def content_edit(request, challenge_id):
         else:
             messages.error(request, "Check the form fields.")
     upload_form = AttachmentUploadForm()
-    hint_form = HintEditForm()
+    hint_form = HintCreateForm()
     lab_template = getattr(challenge, "lab_template", None)  # reverse OneToOne accessor
     return render(request, "manage/content_edit.html", {
         "challenge": challenge, "form": form, "upload_form": upload_form,
@@ -484,7 +496,7 @@ def hint_create(request, challenge_id):
     challenge = get_object_or_404(Challenge, pk=challenge_id)
     if request.method != "POST":
         return redirect("manage-content-edit", challenge_id=challenge_id)
-    form = HintEditForm(request.POST)
+    form = HintCreateForm(request.POST)
     if form.is_valid():
         try:
             adminops.create_hint(

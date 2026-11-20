@@ -5,9 +5,10 @@
 <h1>Edit hint</h1>
 <p class="muted small">{{ hint.challenge.title }}. Existing owners' deductions change retroactively.</p>
 <section class="panel">
+  <h2>Price &amp; content</h2>
   <form method="post">
     {% csrf_token %}
-    {{ form.as_p }}
+    {% include "manage/_labeled_form.html" with form=form %}
     <button class="btn primary" type="submit" name="preview" value="1">Preview impact</button>
   </form>
 </section>
@@ -24,7 +25,10 @@
   <form method="post">
     {% csrf_token %}
     {{ form.as_hidden }}
-    <input type="hidden" name="reason" value="{{ form.reason.value }}">
+    <div class="field">
+      <label for="id_reason_apply">Audit reason (confirm)</label>
+      <input type="text" name="reason" id="id_reason_apply" value="{{ form.reason.value|default:'' }}" required>
+    </div>
     <input type="hidden" name="expected_revision" value="{{ preview.revision }}">
     <button class="btn primary" type="submit" name="apply" value="1">Apply this revision</button>
   </form>

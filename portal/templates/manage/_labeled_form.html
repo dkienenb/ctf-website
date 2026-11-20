@@ -1,6 +1,8 @@
 {% for field in form %}
   {% if field.is_hidden %}
     {{ field }}
+  {% elif field.name == "DELETE" %}
+    {{ field.as_hidden }}
   {% else %}
     <div class="field">
       <label for="{{ field.id_for_label }}">{{ field.label }}</label>
