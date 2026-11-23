@@ -615,7 +615,10 @@ class LibvirtExecutor:
             ("domain.xml", directory / "domain.xml"),
             ("disk-template", disk),
         ) if path.exists()]
-        self.upload_build_artifacts(build_id, role, version, files)
+        client = getattr(self, "client", None)
+        if client is None:
+            raise AgentError("build-upload has no controller link (agent wiring bug)")
+        client.upload_build_artifacts(build_id, role, version, files)
         return {"uploaded": [name for name, _ in files], "role": role, "version": version}
 
     def build_discard(self, command):
@@ -996,6 +999,9 @@ def run_once(client, executor, config, deadlines, build_inline=False):
         deadlines.update(response.get("lease_deadlines", {}))
     except (urllib.error.URLError, OSError, json.JSONDecodeError):
         pass  # controller link lost; local deadlines still enforced
+    # The executor normally never talks to the controller, but build-upload
+    # (the reverse artifact transfer) is the exception — wire the link on.
+    executor.client = client
     handled = 0
     try:
         commands = client.poll().get("commands", [])
@@ -1059,6 +1065,7 @@ def build_worker(client, executor):
             return
         _, _, _ = command
         c, e, cmd = command
+        e.client = c  # build-upload (reverse transfer) needs the controller link
         try:
             detail = execute(e, cmd)
             c.result(cmd["op_id"], "ok", detail)

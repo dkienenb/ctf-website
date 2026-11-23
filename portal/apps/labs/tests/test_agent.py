@@ -285,26 +285,38 @@ class AgentExecutorTests(TestCase):
 
     def test_build_upload_repushes_capture_artifacts(self):
         """The reverse-transfer retry: the agent re-pushes a captured
-        template's files; missing files are skipped, a missing disk is an
-        error (nothing to upload)."""
+        template's files through the CONTROLLER CLIENT (wired onto the
+        executor — upload_build_artifacts lives on the client, not the
+        executor). Missing files are skipped; a missing disk is an error."""
         import tempfile
+        import types
 
         with tempfile.TemporaryDirectory() as tmp:
             executor = self._executor(tmp)
+            pushed = []
+            executor.client = types.SimpleNamespace(
+                upload_build_artifacts=lambda build_id, role, version, files: pushed.append(
+                    (build_id, role, version, [name for name, _ in files])))
             version_dir = executor.images_dir / "attacker" / "kali-base"
             version_dir.mkdir(parents=True)
             (version_dir / "domain.xml").write_text("<domain>@NAME@</domain>")
             (version_dir / "disk-template").write_bytes(b"captured-disk")
-            pushed = []
-            executor.upload_build_artifacts = (
-                lambda build_id, role, version, files: pushed.append(
-                    (build_id, role, version, [name for name, _ in files])))
             detail = workhorse_agent.execute(executor, {
                 "op_id": "u1", "operation": "build-upload",
                 "payload": {"role": "attacker", "version": "kali-base", "build_id": 5}})
             self.assertEqual(detail["uploaded"], ["domain.xml", "disk-template"])
             self.assertEqual(pushed, [(5, "attacker", "kali-base",
                                        ["domain.xml", "disk-template"])])
+            # No controller link wired: a wiring bug fails loudly.
+            with tempfile.TemporaryDirectory() as tmp2:
+                unwired = self._executor(tmp2)
+                (unwired.images_dir / "attacker" / "kali-base2").mkdir(parents=True)
+                (unwired.images_dir / "attacker" / "kali-base2" / "disk-template").write_bytes(b"x")
+                with self.assertRaises(workhorse_agent.AgentError) as error:
+                    workhorse_agent.execute(unwired, {
+                        "op_id": "u3", "operation": "build-upload",
+                        "payload": {"role": "attacker", "version": "kali-base2", "build_id": 7}})
+                self.assertIn("no controller link", str(error.exception))
             # A version with no captured disk has nothing to push.
             empty = executor.images_dir / "attacker" / "kali-empty"
             empty.mkdir(parents=True)
