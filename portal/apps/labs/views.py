@@ -1,6 +1,6 @@
 """Player lab actions: request, claim, refresh, release, reset request."""
 from django.contrib import messages
-from django.shortcuts import get_object_or_404, redirect
+from django.shortcuts import get_object_or_404, redirect, render
 from django.views.decorators.http import require_POST
 
 from portal.apps.accounts.decorators import approved_page
@@ -48,13 +48,16 @@ def desktop(request, slug):
     endpoint only; nothing player-supplied selects the destination."""
     challenge = get_object_or_404(Challenge, slug=slug)
     lab = request.user.labs.filter(challenge=challenge).first()
-    from .guacamole import GrantError, issue_grant
+    from .guacamole import GrantError, issue_grant_flow
 
     if not lab or lab.state != "running":
         messages.error(request, "No running lab. Claim a lease first.")
         return redirect("challenge_detail", slug=slug)
     try:
-        return redirect(issue_grant(request.user, lab))
+        flow = issue_grant_flow(request.user, lab)
     except GrantError as error:
         messages.error(request, error.message)
         return redirect("challenge_detail", slug=slug)
+    # Console bridge page: completes the JSON grant handshake in the browser
+    # (same cached-token caveat as the admin build console — see there).
+    return render(request, "labs/console_bridge.html", flow)

@@ -11,7 +11,7 @@ from django.shortcuts import get_object_or_404, redirect, render
 from django.contrib import messages
 
 from portal.apps.accounts.decorators import admin_page
-from portal.apps.labs.guacamole import issue_build_grant, GrantError as BuildGrantError
+from portal.apps.labs.guacamole import issue_build_grant_flow, GrantError as BuildGrantError
 from .models import Host, MachineBuild, MachineImage
 from . import services as lab_services
 
@@ -119,14 +119,22 @@ def build_action(request, build_id):
 
 @admin_page
 def build_console(request, build_id):
-    """Guacamole grant for the build guest's VNC (attacker-role builds)."""
+    """Guacamole grant for the build guest's VNC (attacker-role builds).
+
+    Renders the console bridge page rather than redirecting straight to
+    Guacamole: the bridge POSTs the grant alone, so the JSON provider always
+    authenticates it. A direct redirect made the SPA re-send the browser's
+    previous auth token with the grant, Guacamole's cached-token provider
+    won, and the grant's temporary connection was silently dropped — the
+    "The requested connection does not exist" the operator kept seeing."""
 
     build = get_object_or_404(MachineBuild.objects.select_related("host"), pk=build_id)
     try:
-        return redirect(issue_build_grant(request.user, build))
+        flow = issue_build_grant_flow(request.user, build)
     except BuildGrantError as error:
         messages.error(request, error.message)
         return redirect("manage-build", build_id=build.id)
+    return render(request, "labs/console_bridge.html", flow)
 
 
 @admin_page

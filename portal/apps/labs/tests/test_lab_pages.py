@@ -34,10 +34,14 @@ class LabPageFlowTests(TestCase):
         self.assertEqual(self._lab().state, "starting")
         complete(self.host, "allocate")
         self.assertEqual(self._lab().state, "running")
-        # The desktop opens for a running lab (grant issued, redirect to Guacamole).
+        # The desktop opens for a running lab (grant issued, console bridge
+        # page rendered: the browser POSTs the grant, stores the fresh
+        # authToken, then enters the viewer).
         response = self.client.get(reverse("lab-desktop", args=[self.challenge.slug]))
-        self.assertEqual(response.status_code, 302)
-        self.assertIn("data=", response.url)  # the signed grant rides the URL
+        self.assertEqual(response.status_code, 200)
+        self.assertTemplateUsed(response, "labs/console_bridge.html")
+        self.assertContains(response, "guacamole/api/tokens")
+        self.assertContains(response, "guacamole/#/client/")
 
     def _lab(self):
         return LabInstance.objects.get(user=self.user, challenge=self.challenge)

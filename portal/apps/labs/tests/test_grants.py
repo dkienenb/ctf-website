@@ -106,6 +106,46 @@ class DesktopRoutingTests(TestCase):
         data = unquote(fragment.split("data=")[1])
         self.assertTrue(data)  # nonempty encrypted grant
 
+    def test_grant_flow_carries_the_bridge_parts(self):
+        """The console bridge page needs the grant, the instance's token
+        endpoint, and a client deep link WITHOUT the data parameter (the
+        bridge stores the fresh authToken first; riding the data param in
+        would make the SPA's resolve re-POST it with the token and trip the
+        cached-provider short-circuit)."""
+        from urllib.parse import unquote
+        challenge = make_lab_challenge()
+        user = make_user("700000000000000010", "Bridged")
+        from portal.apps.labs import services
+        services.request_lab(user, challenge.id)
+        services.claim(user, challenge.id)
+        lab = user.labs.get(challenge=challenge)
+
+        flow = guacamole.issue_grant_flow(user, lab)
+        self.assertEqual(flow["auth_url"], "/guacamole/api/tokens")
+        self.assertTrue(flow["client_url"].startswith("/guacamole/#/client/"))
+        self.assertNotIn("data=", flow["client_url"])
+        self.assertTrue(flow["data"])  # nonempty signed+encrypted grant
+        # The deep-link URL (legacy shape) is the client URL + encoded data.
+        url = guacamole.issue_grant(user, lab)
+        self.assertTrue(url.startswith(flow["client_url"] + "?data="))
+        # Two calls differ (fresh expiry timestamps), but both decrypt to a
+        # grant for the same connection.
+        import base64
+        import json as json_lib
+        from urllib.parse import unquote as _unquote
+        from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
+        from cryptography.hazmat.primitives import padding
+
+        def _connection_id(encoded_data):
+            key = bytes.fromhex("ab" * 16)
+            decryptor = Cipher(algorithms.AES(key), modes.CBC(b"\x00" * 16)).decryptor()
+            padded = base64.b64decode(_unquote(encoded_data))
+            unpadder = padding.PKCS7(128).unpadder()
+            raw = unpadder.update(decryptor.update(padded) + decryptor.finalize()) + unpadder.finalize()
+            return list(json_lib.loads(raw[32:])["connections"])[0]
+
+        self.assertEqual(_connection_id(url.split("data=")[1]), "lab-" + str(lab.id))
+
 
 @override_settings(GUACAMOLE_JSON_SECRET="ab" * 16)
 class GrantShapeTests(TestCase):

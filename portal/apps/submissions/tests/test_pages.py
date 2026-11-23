@@ -163,8 +163,8 @@ class PageFlowTests(TestCase):
         )
         with override_settings(GUACAMOLE_JSON_SECRET="ab" * 16):
             response = self.client.get(reverse("lab-desktop", args=[question.challenge.slug]))
-        self.assertEqual(response.status_code, 302)
-        self.assertIn("/guacamole/", response["Location"])
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "/guacamole/")
 
     def test_idempotent_form_resubmission(self):
         """Double-submitted forms reuse the rendered request id: no extra attempt."""

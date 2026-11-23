@@ -1,0 +1,68 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Opening console…</title>
+<style>
+  body { font-family: system-ui, sans-serif; background: #10141c; color: #dbe2ee;
+         display: flex; align-items: center; justify-content: center; min-height: 100vh; margin: 0; }
+  main { max-width: 32rem; padding: 2rem; text-align: center; }
+  h1 { font-size: 1.25rem; font-weight: 600; }
+  #error { color: #ff8f8f; white-space: pre-wrap; }
+  a { color: #7fb3ff; }
+  .muted { color: #8a93a5; font-size: .85rem; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Opening console…</h1>
+  <p id="status">Authenticating to the remote desktop…</p>
+  <p id="error" hidden></p>
+  <p>
+    <a id="retry" href="" hidden>Try again</a>
+    <a href="/">Back to the portal</a>
+  </p>
+  <p class="muted">You will land in the Guacamole viewer. This page completes
+  a one-time, five-minute handshake and then leaves.</p>
+</main>
+{{ data|json_script:"grant-data" }}
+{{ auth_url|json_script:"grant-auth-url" }}
+{{ client_url|json_script:"grant-client-url" }}
+<script>
+(function () {
+  "use strict";
+  var data = JSON.parse(document.getElementById("grant-data").textContent);
+  var authUrl = JSON.parse(document.getElementById("grant-auth-url").textContent);
+  var clientUrl = JSON.parse(document.getElementById("grant-client-url").textContent);
+  var status = document.getElementById("status");
+  var errorBox = document.getElementById("error");
+  var retry = document.getElementById("retry");
+  retry.href = location.href; // a fresh GET re-issues a fresh grant
+
+  fetch(authUrl, {
+    method: "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    // encodeURIComponent is essential: base64 carries "+", which an
+    // unencoded form body would deliver as a space, corrupting the grant.
+    body: "data=" + encodeURIComponent(data),
+  }).then(function (response) { return response.json(); }).then(function (result) {
+    if (!result.authToken) {
+      throw new Error(result.message || "The console refused the grant.");
+    }
+    // Store exactly the way the Guacamole SPA does (JSON-stringified under
+    // GUAC_AUTH_TOKEN) so the viewer resumes this session on arrival.
+    try { localStorage.setItem("GUAC_AUTH_TOKEN", JSON.stringify(result.authToken)); }
+    catch (storageError) { /* private mode etc. — the viewer still has the token in memory */ }
+    status.textContent = "Connecting…";
+    location.replace(clientUrl);
+  }).catch(function (failure) {
+    status.hidden = true;
+    errorBox.textContent = "Could not open the console: " + failure.message;
+    errorBox.hidden = false;
+    retry.hidden = false;
+  });
+})();
+</script>
+</body>
+</html>

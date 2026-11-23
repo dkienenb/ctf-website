@@ -94,6 +94,24 @@ def _client_url_identifier(connection_id):
     return base64.urlsafe_b64encode(raw).rstrip(b"=").decode()
 
 
+def issue_grant_flow(user, lab, *, vnc_port=None):
+    """Grant parts for the console bridge page (the browser completes the
+    JSON handshake itself — see `issue_grant` for why)."""
+    if not lab.host or not lab.host.management_ip:
+        raise GrantError("The lab's workhorse has not reported its management address yet.")
+    vnc_port = str(vnc_port if vnc_port is not None else vnc_port_for(lab))
+    return _grant_parts(user, f"lab-{lab.id}", "127.0.0.1", vnc_port, lab.host.name)
+
+
+def issue_build_grant_flow(user, build):
+    """Grant parts for a template-build guest's console bridge page."""
+    if not build.host or not build.host.management_ip:
+        raise GrantError("The build's workhorse has not reported its management address yet.")
+    if not build.vnc_port:
+        raise GrantError("The build guest is not booted yet (no console port assigned).")
+    return _grant_parts(user, f"build-{build.id}", "127.0.0.1", str(build.vnc_port), build.host.name)
+
+
 def issue_grant(user, lab, *, vnc_port=None):
     """A grant valid five minutes, permitting only this lab's attacker desktop.
 
@@ -101,25 +119,35 @@ def issue_grant(user, lab, *, vnc_port=None):
     (compose: the guacd co-located on the lab's workhorse) — Guacamole 1.6.0
     has no per-connection guacd routing, so no guacd parameters are sent
     here. That guacd reaches the guest's VNC over the workhorse's loopback.
-    All destinations are server-derived from the lab record."""
-    if not lab.host or not lab.host.management_ip:
-        raise GrantError("The lab's workhorse has not reported its management address yet.")
-    vnc_host = "127.0.0.1"
-    vnc_port = str(vnc_port if vnc_port is not None else vnc_port_for(lab))
-    return _grant(user, f"lab-{lab.id}", vnc_host, vnc_port, lab.host.name)
+    All destinations are server-derived from the lab record.
+
+    Returns the deep-link URL (client identifier + `data` parameter). Views
+    should prefer `issue_grant_flow` + the console bridge page: navigating
+    straight here makes the SPA re-POST its PREVIOUS auth token alongside
+    the grant, and Guacamole's cached-token provider then wins, silently
+    discarding the grant's temporary connections ("connection does not
+    exist"). The bridge POSTs the grant alone, so the JSON provider always
+    sees it."""
+    flow = issue_grant_flow(user, lab, vnc_port=vnc_port)
+    return f'{flow["client_url"]}?data={quote(flow["data"])}'
 
 
 def issue_build_grant(user, build):
-    """A grant for an interactive template-build guest's VNC (attacker-role
-    builds; targets are provisioned over SSH and have no console)."""
-    if not build.host or not build.host.management_ip:
-        raise GrantError("The build's workhorse has not reported its management address yet.")
-    if not build.vnc_port:
-        raise GrantError("The build guest is not booted yet (no console port assigned).")
-    return _grant(user, f"build-{build.id}", "127.0.0.1", str(build.vnc_port), build.host.name)
+    """Deep-link grant URL for an interactive template-build guest's VNC
+    (attacker-role builds; targets are provisioned over SSH and have no
+    console). See `issue_grant` for the cached-token caveat — views should
+    prefer `issue_build_grant_flow`."""
+    flow = issue_build_grant_flow(user, build)
+    return f'{flow["client_url"]}?data={quote(flow["data"])}'
 
 
-def _grant(user, connection_id, vnc_host, vnc_port, host_name):
+def _grant_parts(user, connection_id, vnc_host, vnc_port, host_name):
+    """Build one grant's payload plus the URLs the console bridge page needs:
+
+    data       — the signed+encrypted grant (base64; the `data` parameter)
+    auth_url   — the Guacamole instance's token endpoint (POST the grant here)
+    client_url — the SPA deep link WITHOUT the data parameter (navigate here
+                 once the returned authToken is stored)"""
     payload = {
         "username": user.discord_id,
         "expires": int(time.time() * 1000) + GRANT_TTL_MS,
@@ -146,4 +174,8 @@ def _grant(user, connection_id, vnc_host, vnc_port, host_name):
     # type" before it ever dials guacd.
     fragment_id = _client_url_identifier(connection_id)
     base = instance_base_path(host_name)
-    return f"{base}#/client/{fragment_id}?data={quote(data)}"
+    return {
+        "data": data,
+        "auth_url": f"{base}api/tokens",
+        "client_url": f"{base}#/client/{fragment_id}",
+    }

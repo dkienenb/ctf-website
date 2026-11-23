@@ -298,6 +298,7 @@ class MachineImageServiceTests(TestCase):
         self.assertEqual(error.exception.status, 409)
 
 
+@override_settings(GUACAMOLE_JSON_SECRET="ab" * 16)
 class MachineImagePageTests(TestCase):
     def setUp(self):
         self.admin = make_admin("910000000000000001")
@@ -326,6 +327,59 @@ class MachineImagePageTests(TestCase):
         pleb = make_user("910000000000000009", "Pleb")
         self.client.force_login(pleb)
         self.assertEqual(self.client.get(reverse("manage-build-start")).status_code, 302)
+
+    def test_build_console_renders_the_grant_bridge(self):
+        """The console is handed off through the bridge page, not a bare
+        redirect: the SPA re-sends any stored auth token alongside a
+        redirect's grant, Guacamole's cached-token provider wins, and the
+        grant's connection is silently dropped ("connection does not
+        exist"). The bridge POSTs the grant alone."""
+        from portal.apps.labs.models import MachineBuild
+        import re as re_mod
+
+        host = make_host("bridge-host")
+        response = self.client.post(reverse("manage-build-start"), {
+            "host": host.id, "role": "attacker", "base_version": "",
+            "version": "kali-bridge", "ssh_user": "root",
+        })
+        build = MachineBuild.objects.get(version="kali-bridge")
+        services.complete_command(host, f"build-{build.id}-start", "ok", {"vnc_port": "6911"})
+
+        response = self.client.get(reverse("manage-build-console", args=[build.id]))
+        self.assertEqual(response.status_code, 200)
+        self.assertTemplateUsed(response, "labs/console_bridge.html")
+        self.assertContains(response, "guacamole/api/tokens")
+        self.assertContains(response, "guacamole/#/client/")
+        # The embedded grant is present and decryptable with the test secret.
+        match = re_mod.search(
+            r'id="grant-data"[^>]*>([^<]+)<', response.content.decode())
+        self.assertTrue(match)
+        import json as json_lib
+        import base64
+        from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
+        from cryptography.hazmat.primitives import padding
+        data = json_lib.loads(match.group(1))
+        key = bytes.fromhex("ab" * 16)
+        decryptor = Cipher(algorithms.AES(key), modes.CBC(b"\x00" * 16)).decryptor()
+        padded = base64.b64decode(data)
+        unpadder = padding.PKCS7(128).unpadder()
+        raw = unpadder.update(decryptor.update(padded) + decryptor.finalize()) + unpadder.finalize()
+        payload = json_lib.loads(raw[32:])  # skip HMAC signature
+        connection = list(payload["connections"].values())[0]
+        self.assertEqual(connection["parameters"]["port"], "6911")
+        self.assertEqual(connection["parameters"]["hostname"], "127.0.0.1")
+
+    def test_build_console_refused_when_guest_is_not_booted(self):
+        from portal.apps.labs.models import MachineBuild
+
+        host = make_host("bridge-noboost-host")
+        self.client.post(reverse("manage-build-start"), {
+            "host": host.id, "role": "attacker", "base_version": "",
+            "version": "kali-noboost", "ssh_user": "root",
+        })
+        build = MachineBuild.objects.get(version="kali-noboost")
+        response = self.client.get(reverse("manage-build-console", args=[build.id]))
+        self.assertEqual(response.status_code, 302)  # back to the build page with an error message
 
 
     def test_create_via_page_and_list_matrix(self):
