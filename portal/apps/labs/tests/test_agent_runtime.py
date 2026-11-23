@@ -205,4 +205,5 @@ class AgentRuntimeTests(TestCase):
             "refresh-lease", "template-put", "template-fetch", "template-verify",
             "template-remove", "template-list",
             "build-start", "build-status", "build-exec", "build-capture", "build-discard",
+            "build-upload",
         })

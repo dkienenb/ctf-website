@@ -592,6 +592,32 @@ class LibvirtExecutor:
         text = re.sub(r"\n?[ \t]*<boot dev='cdrom'/>", "", text)
         xml_path.write_text(text)
 
+    def build_upload(self, command):
+        """(Re-)push a captured template's artifacts to the controller.
+
+        Reverse transfer retry for a capture whose chunked upload failed —
+        the template directory is host-local and the controller record is
+        waiting on its disk. Idempotent: the controller re-assembles,
+        verifies the sha256, and re-attaches."""
+        payload = command["payload"]
+        role = self._check_name(payload.get("role", ""), "role")
+        if role not in self.ROLES:
+            raise AgentError(f"unknown template role: {role}")
+        version = self._check_name(payload.get("version", ""), "template version")
+        build_id = payload.get("build_id")
+        if not build_id:
+            raise AgentError("build-upload requires build_id (the controller record to attach to)")
+        directory = self.template_dir(role, version)
+        disk = directory / "disk-template"
+        if not disk.exists():
+            raise AgentError(f"nothing to upload: {disk} is missing")
+        files = [(name, path) for name, path in (
+            ("domain.xml", directory / "domain.xml"),
+            ("disk-template", disk),
+        ) if path.exists()]
+        self.upload_build_artifacts(build_id, role, version, files)
+        return {"uploaded": [name for name, _ in files], "role": role, "version": version}
+
     def build_discard(self, command):
         """Destroy the build guest and its scratch disk without capturing."""
         payload = command["payload"]
@@ -823,15 +849,16 @@ VOCABULARY = {
     "recover": lambda executor, command: executor.reset({**command, "scope": "target"}),
     "refresh-lease": lambda executor, command: {"acknowledged": command.get("acknowledged_deadline")},
     "template-put": lambda executor, command: executor.template_put(command),
+    "template-remove": lambda executor, command: executor.template_remove(command),
     "template-fetch": lambda executor, command: executor.template_fetch(command),
     "template-verify": lambda executor, command: executor.template_verify(command),
-    "template-remove": lambda executor, command: executor.template_remove(command),
     "template-list": lambda executor, command: executor.template_inventory(),
     "build-start": lambda executor, command: executor.build_start(command),
     "build-status": lambda executor, command: executor.build_status(command),
     "build-exec": lambda executor, command: executor.build_exec(command),
     "build-capture": lambda executor, command: executor.build_capture(command),
     "build-discard": lambda executor, command: executor.build_discard(command),
+    "build-upload": lambda executor, command: executor.build_upload(command),
 }
 
 
@@ -869,12 +896,15 @@ class ControllerClient:
     def result(self, op_id, status, detail):
         return self.request(f"/agentapi/commands/{op_id}/result", {"status": status, "result": detail})
 
-    def upload_build_artifacts(self, build_id, role, version, files, disk_sha="", chunk_bytes=2 * 1024 * 1024):
+    def upload_build_artifacts(self, build_id, role, version, files, disk_sha="", chunk_bytes=1024 * 1024):
         """Push captured build artifacts back to the controller, chunked.
 
         Keeps multi-gigabyte captures out of agent memory: each chunk is
         read, base64-encoded, and POSTed immediately; the controller
-        assembles on disk and verifies against the capture hash."""
+        assembles on disk and verifies against the capture hash. The chunk
+        rides inside a JSON body as base64 (1.37× inflation), so 1 MiB
+        chunks stay under Django's 2.5MB DATA_UPLOAD_MAX_MEMORY_SIZE —
+        2 MiB chunks are rejected wholesale and the push dies on chunk 1."""
         for file_name, path in files:
             if not path.exists():
                 continue  # e.g. target templates may omit nothing; domain.xml always exists post-capture

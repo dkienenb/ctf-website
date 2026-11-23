@@ -591,3 +591,60 @@ class BuildEdgeCaseTests(TestCase):
         image.disk_file.open("rb")
         self.assertEqual(image.disk_file.read(), content)
         image.disk_file.close()
+
+
+class BuildUploadRetryTests(TestCase):
+    """Re-issuing the reverse artifact upload after a failed capture push."""
+
+    def setUp(self):
+        self.admin = make_admin("550000000000000001")
+        self.user = make_user("550000000000000002", "Player")
+        self.host = make_host("upload-host")
+
+    def _captured_build(self):
+        from portal.apps.labs.models import MachineBuild
+        build = services.start_build(self.admin, host_id=self.host.id,
+                                     role="attacker", version="kali-up", base_version="")
+        MachineBuild.objects.filter(pk=build.id).update(state=MachineBuild.State.CAPTURED)
+        build.refresh_from_db()
+        return build
+
+    def test_retry_queues_a_build_upload_command(self):
+        from portal.apps.labs.models import HostCommand, MachineBuild
+        build = self._captured_build()
+        command = services.retry_build_upload(self.admin, build.id)
+        self.assertEqual(command.operation, "build-upload")
+        self.assertEqual(command.status, HostCommand.Status.PENDING)
+        self.assertEqual(command.payload, {"role": "attacker", "version": "kali-up",
+                                           "build_id": build.id})
+        self.assertEqual(command.host, self.host)
+
+    def test_retry_is_idempotent_and_reissues_completed(self):
+        from portal.apps.labs.models import HostCommand, MachineBuild
+        build = self._captured_build()
+        first = services.retry_build_upload(self.admin, build.id)
+        HostCommand.objects.filter(pk=first.pk).update(status=HostCommand.Status.FAILED,
+                                                       result={"error": "chunk rejected"})
+        second = services.retry_build_upload(self.admin, build.id)
+        self.assertEqual(second.pk, first.pk)
+        second.refresh_from_db()
+        self.assertEqual(second.status, HostCommand.Status.PENDING)
+        self.assertEqual(second.result, {})
+
+    def test_retry_refused_for_active_and_uncaptured_builds(self):
+        from portal.apps.labs.models import MachineBuild
+        build = services.start_build(self.admin, host_id=self.host.id,
+                                     role="attacker", version="kali-up2", base_version="")
+        with self.assertRaises(ServiceError) as error:
+            services.retry_build_upload(self.admin, build.id)  # still starting
+        self.assertIn("captured", error.exception.message)
+
+    def test_retry_requires_admin_and_online_host(self):
+        from portal.apps.labs.models import Host, MachineBuild
+        build = self._captured_build()
+        with self.assertRaises(ServiceError):
+            services.retry_build_upload(self.user, build.id)
+        Host.objects.filter(pk=self.host.pk).update(online=False)
+        with self.assertRaises(ServiceError) as error:
+            services.retry_build_upload(self.admin, build.id)
+        self.assertIn("offline", error.exception.message)

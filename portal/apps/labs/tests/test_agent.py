@@ -282,6 +282,37 @@ class AgentExecutorTests(TestCase):
             # Placeholders and the real disk device survive the strip.
             self.assertIn("@NAME@", xml)
             self.assertIn("@DISK@", xml)
+
+    def test_build_upload_repushes_capture_artifacts(self):
+        """The reverse-transfer retry: the agent re-pushes a captured
+        template's files; missing files are skipped, a missing disk is an
+        error (nothing to upload)."""
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmp:
+            executor = self._executor(tmp)
+            version_dir = executor.images_dir / "attacker" / "kali-base"
+            version_dir.mkdir(parents=True)
+            (version_dir / "domain.xml").write_text("<domain>@NAME@</domain>")
+            (version_dir / "disk-template").write_bytes(b"captured-disk")
+            pushed = []
+            executor.upload_build_artifacts = (
+                lambda build_id, role, version, files: pushed.append(
+                    (build_id, role, version, [name for name, _ in files])))
+            detail = workhorse_agent.execute(executor, {
+                "op_id": "u1", "operation": "build-upload",
+                "payload": {"role": "attacker", "version": "kali-base", "build_id": 5}})
+            self.assertEqual(detail["uploaded"], ["domain.xml", "disk-template"])
+            self.assertEqual(pushed, [(5, "attacker", "kali-base",
+                                       ["domain.xml", "disk-template"])])
+            # A version with no captured disk has nothing to push.
+            empty = executor.images_dir / "attacker" / "kali-empty"
+            empty.mkdir(parents=True)
+            with self.assertRaises(workhorse_agent.AgentError) as error:
+                workhorse_agent.execute(executor, {
+                    "op_id": "u2", "operation": "build-upload",
+                    "payload": {"role": "attacker", "version": "kali-empty", "build_id": 6}})
+            self.assertIn("nothing to upload", str(error.exception))
     def test_vocabulary_remains_restricted_and_closed(self):
         with self.assertRaises(workhorse_agent.AgentError):
             workhorse_agent.execute(None, {"operation": "shell", "payload": {"cmd": "rm -rf /"}})
@@ -293,6 +324,7 @@ class AgentExecutorTests(TestCase):
             "refresh-lease", "template-put", "template-fetch", "template-verify",
             "template-remove", "template-list",
             "build-start", "build-status", "build-exec", "build-capture", "build-discard",
+            "build-upload",
         })
 
     def test_allocate_requires_pinned_templates(self):

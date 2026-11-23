@@ -24,6 +24,15 @@
   <p class="muted small">Capture performs a graceful shutdown, compacts <em>and compresses</em> the disk (typically 3–5× smaller), writes the template onto {{ build.host.name }}, then transfers the files back to the controller — ready to distribute.</p>
   <p class="muted small">Build checklist: install what you need, enable sshd (or use the console), verify a clean reboot boots to a working system, then capture.</p>
 </section>
+{% if build.state == 'captured' %}
+<section class="panel">
+  <h2>Transfer</h2>
+  <div class="button-row">
+    <form method="post" action="{% url 'manage-build-action' build.id %}">{% csrf_token %}<input type="hidden" name="do" value="upload"><button class="btn" type="submit">Re-upload capture to controller</button></form>
+  </div>
+  <p class="muted small">The capture is complete on {{ build.host.name }}. If the automatic transfer to the controller failed (the template record would show no disk), this re-pushes it — safe to repeat.</p>
+</section>
+{% endif %}
 {% if build.state == 'starting' %}
 <script>setInterval(function () { window.location.reload(); }, 5000);</script>
 {% endif %}

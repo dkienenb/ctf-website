@@ -798,6 +798,43 @@ def capture_build(actor, build_id):
     return command
 
 
+def retry_build_upload(actor, build_id):
+    """Re-issue the reverse upload of a capture's artifacts.
+
+    After a successful capture the agent pushes domain.xml + disk-template
+    back to the controller so the template becomes distributable. If that
+    push failed (e.g. the oversized-chunk rejection), the template sits
+    host-local and the controller record has no disk; this queues a
+    build-upload command for the agent to push again. Idempotent: the
+    controller re-assembles, verifies the sha256, and re-attaches."""
+    from .models import MachineBuild
+    from portal.apps.submissions.models import DataRevision
+
+    if actor is None or not getattr(actor, "is_admin", False):
+        raise ServiceError("Administrator access is required.", 403)
+    with transaction.atomic():
+        build = MachineBuild.objects.select_for_update().select_related("host").get(pk=build_id)
+        if build.state not in (MachineBuild.State.CAPTURED, MachineBuild.State.DISCARDED):
+            raise ServiceError("Only a captured build can re-upload its template.", 409)
+        if not build.host.online:
+            raise ServiceError("This build's workhorse is offline; upload needs the template file it holds.", 409)
+        command, created = HostCommand.objects.get_or_create(
+            op_id=f"build-{build.id}-upload", host=build.host,
+            defaults={
+                "operation": "build-upload",
+                "payload": {"role": build.role, "version": build.version,
+                            "build_id": build.id},
+                "expected_generation": 1,
+            },
+        )
+        if not created and command.status in (HostCommand.Status.FAILED, HostCommand.Status.COMPLETED):
+            command.status = HostCommand.Status.PENDING
+            command.result = {}
+            command.save(update_fields=("status", "result", "updated_at"))
+    DataRevision.bump()
+    return command
+
+
 def discard_build(actor, build_id):
     """Destroy the scratch build VM without capturing (explicitly tracked)."""
     from .models import MachineBuild

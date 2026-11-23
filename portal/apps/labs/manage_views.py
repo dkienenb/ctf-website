@@ -110,6 +110,9 @@ def build_action(request, build_id):
         elif action == "discard":
             lab_services.discard_build(request.user, build.id)
             messages.success(request, "Discard queued: the build guest and its scratch disk are destroyed.")
+        elif action == "upload":
+            lab_services.retry_build_upload(request.user, build.id)
+            messages.success(request, "Upload queued: pushing the captured template back to the controller.")
         else:
             messages.error(request, "Unknown build action.")
     except lab_services.ServiceError as error:
