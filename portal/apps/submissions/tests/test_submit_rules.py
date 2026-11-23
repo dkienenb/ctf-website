@@ -1,13 +1,16 @@
 """Submission integrity rules (handoff §5): the cooldown gate, request
 fingerprint idempotency (retries/replays never double-count), and the
 input-validation negatives around submit()."""
-from django.test import TestCase, override_settings
+import uuid
+
+from django.test import TestCase, TransactionTestCase, override_settings
 from django.utils import timezone
 from datetime import timedelta
 
 from portal.apps.accounts.models import User
+from portal.apps.content.models import Challenge
 from portal.apps.submissions import services
-from portal.apps.submissions.models import Solve, Submission
+from portal.apps.submissions.models import HintRedemption, Solve, Submission
 from portal.apps.submissions.services import ServiceError
 from portal.apps.testutils import make_question, make_user
 
@@ -137,3 +140,150 @@ class SubmitInputValidationTests(TestCase):
         with self.assertRaises(ServiceError) as error:
             services.submit(player, self.question.id, "wrong two", "req-validate-0006")
         self.assertEqual(error.exception.status, 403)
+
+
+@override_settings(SUBMISSION_COOLDOWN_SECONDS=0)
+class SubmissionBoundaryTests(TestCase):
+    """Boundaries: zero-value scoring, exact length limits, whitespace
+    semantics, unicode, and the exact-match trimming contract."""
+
+    def setUp(self):
+        self.user = make_user("800000000000000101", "Boundary")
+        self.zero_q = make_question(["flag"], points=0)
+        self.norm_q = make_question(["flag"], points=100)
+
+    def test_zero_point_question_still_counts_as_solve(self):
+        result = services.submit(self.user, self.zero_q.id, "flag", "req-boundary-0001")
+        self.assertTrue(result["correct"])
+        from portal.apps.submissions.models import Solve
+        self.assertTrue(Solve.objects.filter(user=self.user, question=self.zero_q).exists())
+        data = services.summary(self.user)
+        self.assertEqual(data["earned"], 0)  # zero points but still a solve
+        self.assertEqual(data["correct"], 1)
+
+    def test_zero_cost_hint_deducts_nothing(self):
+        from portal.apps.content.models import Hint
+        hint = Hint.objects.create(challenge_id=self.norm_q.challenge.id,
+                                   description="free", text="t", cost=0)
+        services.redeem(self.user, hint.id)
+        data = services.summary(self.user)
+        self.assertEqual(data["deductions"], 0)
+        self.assertTrue(HintRedemption.objects.filter(user=self.user).exists())
+
+    def test_answer_with_internal_whitespace_stays_untrimmed(self):
+        """Only leading/trailing whitespace is stripped; internal spacing is
+        significant — 'a  b' ≠ 'a b' unless an accepted answer matches."""
+        make_question(["a b"], points=100)  # different question
+        # The exact accepted answer works.
+        from portal.apps.content.models import AcceptedAnswer, Question
+        q = Question.objects.create(challenge=self.norm_q.challenge, prompt="p", points=10)
+        AcceptedAnswer.objects.create(question=q, value="a  b")
+        result = services.submit(self.user, q.id, "a  b", "req-boundary-0002")
+        self.assertTrue(result["correct"])
+        # Internal double-space doesn't match single-space answer.
+        q2 = Question.objects.create(challenge=self.norm_q.challenge, prompt="p", points=10)
+        AcceptedAnswer.objects.create(question=q2, value="a b")
+        result = services.submit(self.user, q2.id, "a  b", "req-boundary-0003")
+        self.assertFalse(result["correct"])
+
+    def test_unicode_answer_round_trip(self):
+        from portal.apps.content.models import AcceptedAnswer, Question
+        q = Question.objects.create(challenge=self.norm_q.challenge, prompt="p", points=10)
+        AcceptedAnswer.objects.create(question=q, value="¿flag?")
+        result = services.submit(self.user, q.id, "¿flag?", "req-boundary-0004")
+        self.assertTrue(result["correct"])
+        # Emoji answer
+        q2 = Question.objects.create(challenge=self.norm_q.challenge, prompt="p", points=10)
+        AcceptedAnswer.objects.create(question=q2, value="🏳️‍🌈")
+        result = services.submit(self.user, q2.id, "🏳️‍🌈", "req-boundary-0005")
+        self.assertTrue(result["correct"])
+
+    def test_answer_newlines_and_tabs_are_preserved_in_raw(self):
+        from portal.apps.submissions.models import Submission
+        services.submit(self.user, self.norm_q.id, "line1\nline2\ttabbed", "req-boundary-0006")
+        sub = Submission.objects.get(user=self.user)
+        self.assertEqual(sub.raw, "line1\nline2\ttabbed")
+        self.assertEqual(sub.answer, "line1\nline2\ttabbed")  # only outer trim
+
+    def test_submission_raw_field_preserves_4096_boundary(self):
+        exact = "x" * 4096
+        result = services.submit(self.user, self.norm_q.id, exact, "req-boundary-0007")
+        self.assertFalse(result["correct"])
+        from portal.apps.submissions.models import Submission
+        sub = Submission.objects.get(user=self.user)
+        self.assertEqual(len(sub.raw), 4096)
+        self.assertEqual(sub.answer, exact)
+
+
+class HintRedemptionConcurrencyTests(TransactionTestCase):
+    """Cross-connection hint redemption race: needs committed data."""
+
+    def setUp(self):
+        self.user = make_user("830000000000000001", "Redeemer")
+        self.norm_q = make_question(["flag"], points=100)
+
+    def test_concurrent_hint_redemptions_award_once(self):
+        """Two simultaneous redeem calls for the same user/hint: exactly one
+        ownership row (the get_or_create is atomic)."""
+        import threading
+        from django.db import connection
+        from portal.apps.content.models import Hint
+        hint = Hint.objects.create(challenge_id=self.norm_q.challenge.id,
+                                   description="d", text="t", cost=10)
+        results = []
+        def redeem():
+            connection.close()
+            try:
+                services.redeem(self.user, hint.id)
+                results.append("ok")
+            except Exception:
+                results.append("error")
+            finally:
+                connection.close()
+        threads = [threading.Thread(target=redeem) for _ in range(2)]
+        [t.start() for t in threads]
+        [t.join() for t in threads]
+        self.assertEqual(len(results), 2)
+        self.assertEqual(HintRedemption.objects.filter(user=self.user, hint=hint).count(), 1)
+    """Leaderboard edge cases: pools with no challenges, zero-score players,
+    players with only hint deductions, and the completion calculation."""
+
+
+class LeaderboardBoundaryTests(TestCase):
+
+    def setUp(self):
+        self.player = make_user("810000000000000001", "Solo")
+
+    def test_empty_pool_returns_empty_leaderboard(self):
+        from portal.apps.content.models import Pool
+        pool = Pool.objects.create(name="Empty", slug="empty")
+        rows = services.leaderboard(pool=pool)
+        # The player appears (all approved players are listed) but with zero data
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["correct"], 0)
+        self.assertEqual(rows[0]["possible"], 0)
+
+    def test_pool_with_no_questions_shows_zero_possible(self):
+        from portal.apps.content.models import Challenge, Pool, PoolChallenge, Question, AcceptedAnswer
+        pool = Pool.objects.create(name="NoQ", slug="noq")
+        ch = Challenge.objects.create(title="NoQ", slug=f"noq-{Challenge.objects.count()}",
+                                      lifecycle=Challenge.Lifecycle.PUBLISHED)
+        PoolChallenge.objects.create(pool=pool, challenge=ch)
+        q = Question.objects.create(challenge=ch, prompt="p", points=100)
+        AcceptedAnswer.objects.create(question=q, value="flag")
+        services.submit(self.player, q.id, "flag", "req-lb-noq-1")
+        rows = services.leaderboard(pool=pool)
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["possible"], 1)
+        self.assertEqual(rows[0]["completion"], 100.0)
+
+    def test_hint_deduction_alone_shows_negative_score(self):
+        from portal.apps.content.models import Hint
+        q = make_question(["flag"], points=100)
+        hint = Hint.objects.create(challenge_id=q.challenge.id, description="d", text="t", cost=150)
+        services.redeem(self.player, hint.id)
+        rows = services.leaderboard()
+        mine = next(r for r in rows if r["id"] == self.player.id)
+        self.assertEqual(mine["points"], -150)  # negative, no solves to offset
+        self.assertEqual(mine["correct"], 0)
+
