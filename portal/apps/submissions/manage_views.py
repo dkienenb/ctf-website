@@ -262,7 +262,7 @@ def question_edit(request, question_id):
         "answers": "\n".join(AcceptedAnswer_values(question)),
         "mode": "none",
     }
-    form = QuestionEditForm(request.POST or initial)
+    form = QuestionEditForm(data=request.POST or None, initial=initial)
     preview = None
     if request.method == "POST":
         if form.is_valid():
@@ -312,7 +312,7 @@ def AcceptedAnswer_values(question):
 def hint_edit(request, hint_id):
     hint = get_object_or_404(Hint.objects.select_related("challenge"), pk=hint_id)
     initial = {"cost": hint.cost, "description": hint.description, "text": hint.text}
-    form = HintEditForm(request.POST or initial)
+    form = HintEditForm(data=request.POST or None, initial=initial)
     preview = None
     if request.method == "POST" and form.is_valid():
         data = {key: form.cleaned_data[key] for key in ("cost", "description", "text")}
@@ -351,7 +351,7 @@ def content_edit(request, challenge_id):
         "go_live": challenge.go_live,
         "revision": DataRevision.current(),
     }
-    form = ContentEditForm(request.POST or initial)
+    form = ContentEditForm(data=request.POST or None, initial=initial)
     if request.method == "POST":
         if form.is_valid():
             go_live = form.cleaned_data["go_live"]
@@ -424,7 +424,7 @@ def pools(request):
 def pool_edit(request, pool_id):
     pool = get_object_or_404(Pool, pk=pool_id)
     initial = {"name": pool.name, "description": pool.description, "order": pool.order}
-    form = PoolForm(request.POST or initial)
+    form = PoolForm(data=request.POST or None, initial=initial)
     if request.method == "POST":
         if form.is_valid():
             try:

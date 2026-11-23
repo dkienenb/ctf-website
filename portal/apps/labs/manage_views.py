@@ -154,7 +154,7 @@ def machine_image_edit(request, image_id=None):
             "role": image.role, "version": image.version, "notes": image.notes,
             "domain_xml": image.domain_xml,
         }
-    form = MachineImageForm(request.POST or initial)
+    form = MachineImageForm(data=request.POST or None, initial=initial)
     if request.method == "POST":
         if form.is_valid():
             disk = request.FILES.get("disk")
