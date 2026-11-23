@@ -8,12 +8,14 @@
   {% csrf_token %}
   {{ form.as_p }}
   <p>
-    <label for="id_disk">Base disk (qcow2) —{% if image and image.disk_file %} current: {{ image.disk_size }} bytes, sha256 {{ image.disk_sha256|slice:":16" }}…{% endif %}</label>
-    <input type="file" name="disk" id="id_disk"{% if image %} disabled{% else %} required{% endif %}>
+    <label for="id_disk">Base disk (qcow2) —{% if image and image.disk_file %} current: {{ image.disk_size }} bytes, sha256 {{ image.disk_sha256|slice:":16" }}…{% elif image %} no disk on controller (host-local capture — upload to complete){% endif %}</label>
+    <input type="file" name="disk" id="id_disk" {% if image and image.disk_file %}disabled{% else %}required{% endif %}>
   </p>
-  <button class="btn primary" type="submit">{% if image %}Update notes{% else %}Create image{% endif %}</button>
+  <button class="btn primary" type="submit">{% if image and image.disk_file %}Update notes{% elif image %}Upload disk &amp; complete{% else %}Create image{% endif %}</button>
 </form>
 {% if image and image.disk_file %}
-<p class="muted small">Versions are immutable: player disks back onto this template's file, so changed contents require a new version (the upload control is disabled on existing versions). Notes stay editable.</p>
+<p class="muted small">Versions are immutable: player disks back onto this template's file, so changed contents require a new version. Notes stay editable.</p>
+{% elif image %}
+<p class="muted small">This captured version has no controller-side disk yet — upload the qcow2 to complete the record for distribution.</p>
 {% endif %}
 {% endblock %}

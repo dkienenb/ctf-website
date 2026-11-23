@@ -14,6 +14,7 @@ from portal.apps.content.models import Challenge
 from portal.apps.testutils import make_host, make_question, make_user
 from portal.apps.labs.models import Host, HostCommand, LabInstance, LabTemplate, MachineBuild, MachineImage, QueueEntry
 from portal.apps.labs import services
+from portal.apps.labs.guacamole import issue_build_grant, GrantError as BuildGrantError
 from portal.apps.submissions.models import DataRevision
 from portal.apps.submissions.services import ServiceError
 
@@ -242,8 +243,7 @@ class MachineImageServiceTests(TestCase):
         host = make_host("build-host")
         build = services.start_build(
             self.admin, host_id=host.id, role="attacker",
-            version="kali-v7", base_version="", ssh_user="root",
-        )
+            version="kali-v7", base_version="",         )
         self.assertEqual(build.state, MachineBuild.State.STARTING)
         start_cmd = HostCommand.objects.get(op_id=f"build-{build.id}-start")
         self.assertEqual(start_cmd.operation, "build-start")
@@ -258,15 +258,6 @@ class MachineImageServiceTests(TestCase):
             services.start_build(self.admin, host_id=host.id, role="target",
                                  version="target-v7", base_version="")
         self.assertIn("already has an active build", error.exception.message)
-        # Command batch queues an exec with the payload the agent needs.
-        cmd = services.run_build_command(self.admin, build.id, script="id; uname -a")
-        self.assertEqual(cmd.operation, "build-exec")
-        self.assertEqual(cmd.payload["script"], "id; uname -a")
-        exec_result = services.complete_command(host, cmd.op_id, "ok",
-                                                {"exit_code": 0, "stdout": "root", "guest_ip": "10.250.0.10"})
-        build.refresh_from_db()
-        self.assertEqual(build.guest_ip, "10.250.0.10")
-        self.assertEqual(build.last_output["exit_code"], 0)
         # Capture creates a HOST-LOCAL machine image from the agent's sha.
         sha = hashlib.sha256(b"captured-disk").hexdigest()
         cap_cmd = services.capture_build(self.admin, build.id)
@@ -291,8 +282,6 @@ class MachineImageServiceTests(TestCase):
                                  version="kali-x", base_version="")
         build = services.start_build(self.admin, host_id=host.id, role="attacker",
                                      version="kali-x", base_version="")
-        with self.assertRaises(ServiceError):
-            services.run_build_command(self.admin, build.id, script="ls")  # not ready yet
         disc = services.discard_build(self.admin, build.id)
         services.complete_command(host, disc.op_id, "ok", {"discarded": "ctf-build-attacker"})
         with self.assertRaises(ServiceError):
@@ -329,7 +318,7 @@ class MachineImagePageTests(TestCase):
         services.complete_command(host, f"build-{build.id}-start", "ok", {"vnc_port": "6911"})
         response = self.client.get(reverse("manage-build", args=[build.id]))
         self.assertEqual(response.status_code, 200)
-        self.assertContains(response, "Command batch")
+        self.assertContains(response, "Console")
         self.assertContains(response, "Capture as template")
         # The start page renders on GET too.
         self.assertEqual(self.client.get(reverse("manage-build-start")).status_code, 200)
@@ -435,9 +424,7 @@ class BuildLifecycleHardeningTests(TestCase):
         second = services.capture_build(self.admin, build.id)  # double click
         self.assertEqual(first.op_id, second.op_id)
         self.assertEqual(HostCommand.objects.filter(operation="build-capture").count(), 1)
-        # While capturing, exec and discard are refused.
-        with self.assertRaises(ServiceError):
-            services.run_build_command(self.admin, build.id, script="ls")
+        # While capturing, discard is refused.
         with self.assertRaises(ServiceError):
             services.discard_build(self.admin, build.id)
 
@@ -447,28 +434,6 @@ class BuildLifecycleHardeningTests(TestCase):
         services.discard_build(self.admin, build.id)
         build.refresh_from_db()
         self.assertEqual(build.state, MachineBuild.State.DISCARDING)
-
-    def test_failed_batch_blocks_capture(self):
-        from portal.apps.labs.models import MachineBuild
-        build = self._build(MachineBuild.State.READY)
-        cmd = services.run_build_command(self.admin, build.id, script="exit 3")
-        services.complete_command(self.host, cmd.op_id, "ok",
-                                  {"exit_code": 3, "stdout": "", "guest_ip": "10.250.0.5"})
-        build.refresh_from_db()
-        self.assertTrue(build.last_output["failed"])  # script failure ≠ command success
-        with self.assertRaises(ServiceError) as error:
-            services.capture_build(self.admin, build.id)
-        self.assertIn("last command batch failed", error.exception.message)
-
-    def test_ssh_password_scrubbed_after_execution(self):
-        build = self._build(MachineBuild.State.READY)
-        cmd = services.run_build_command(self.admin, build.id, script="id",
-                                         ssh_password="hunter2")
-        self.assertEqual(cmd.payload["ssh_password"], "hunter2")  # needed while queued
-        services.complete_command(self.host, cmd.op_id, "ok",
-                                  {"exit_code": 0, "stdout": "id-out", "guest_ip": "10.250.0.6"})
-        cmd.refresh_from_db()
-        self.assertNotIn("hunter2", json.dumps(cmd.payload))  # scrubbed after the result
 
     def test_versions_are_immutable(self):
         from portal.apps.labs.models import MachineImage

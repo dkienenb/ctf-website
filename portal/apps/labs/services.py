@@ -425,7 +425,7 @@ def set_host_online(actor, host_id, online):
 DOMAIN_PLACEHOLDERS = ("@NAME@", "@DISK@", "@VNC_PORT@", "@LAB_NET@")
 TARGET_PLACEHOLDERS = ("@NAME@", "@DISK@", "@LAB_NET@")  # targets are never streamed
 _SAFE_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,79}$")
-STAGE_CHUNK_BYTES = 2 * 1024 * 1024
+STAGE_CHUNK_BYTES = 1024 * 1024  # 1 MiB — base64 inflates to ~1.33 MiB per request, safely under Django's 2.5 MB default body limit
 
 
 def validate_domain_xml(domain_xml, role=None):
@@ -559,6 +559,15 @@ def delete_machine_image(actor, image_id):
     DataRevision.bump()
 
 
+def _fetch_op_id(image, file_key, host_id, sha):
+    """Fetch/verify op-id that fits within HostCommand.op_id's max_length:
+    role and version are hashed rather than embedded raw (long version
+    names previously overflowed the command-ID field)."""
+    identity = f"{image.role}:{image.version}:{sha}"
+    identity_hash = hashlib.sha256(identity.encode()).hexdigest()[:20]
+    return f"fetch-{identity_hash}-{host_id}-{file_key}"
+
+
 def distribute_machine_image(actor, image_id):
     """Stage a pinned image onto every workhorse (Path A v2 transfer).
 
@@ -604,26 +613,29 @@ def distribute_machine_image(actor, image_id):
                 "host": host, "operation": operation, "payload": payload,
             },
         )
-        if not created and command.status == HostCommand.Status.FAILED:
+        if not created and command.status in (HostCommand.Status.FAILED, HostCommand.Status.COMPLETED):
+            # Re-distribution retries FAILED commands AND re-issues COMPLETED
+            # ones: the workhorse may have wiped its staging area since the
+            # last successful transfer, so re-fetching is always safe.
             command.status = HostCommand.Status.PENDING
             command.result = {}
             command.save(update_fields=("status", "result", "updated_at"))
         return command
 
     for host in hosts:
-        stage(host, f"fetch-{image.role}-{image.version}-{xml_sha[:12]}-{host.id}-domain",
+        stage(host, _fetch_op_id(image, "domain", host.id, xml_sha),
               "template-fetch", {
                   "role": image.role, "version": image.version, "file": "domain.xml",
                   "sha256": xml_sha,
               })
         issued += 1
-        stage(host, f"fetch-{image.role}-{image.version}-{staged_sha[:12]}-{host.id}-disk",
+        stage(host, _fetch_op_id(image, "disk", host.id, staged_sha),
               "template-fetch", {
                   "role": image.role, "version": image.version, "file": "disk-template",
                   "sha256": staged_sha, "size": image.disk_size,
               })
         issued += 1
-        stage(host, f"verify-{image.role}-{image.version}-{staged_sha[:12]}-{host.id}-done",
+        stage(host, _fetch_op_id(image, "verify", host.id, staged_sha),
               "template-verify", {
                   "role": image.role, "version": image.version,
                   "sha256": staged_sha, "size": image.disk_size,
@@ -702,7 +714,7 @@ def lab_template_clear(actor, challenge_id):
 
 # --- Interactive template building (§10) --------------------------------------
 
-def start_build(actor, *, host_id, role, version, base_version="", ssh_user="root"):
+def start_build(actor, *, host_id, role, version, base_version=""):
     """Boot a scratch build VM on a workhorse (one build slot per host).
 
     The host row is locked inside the transaction so two simultaneous
@@ -738,7 +750,7 @@ def start_build(actor, *, host_id, role, version, base_version="", ssh_user="roo
             raise ServiceError("This workhorse is not admitting new machines.", 409)
         build = MachineBuild.objects.create(
             host=host, role=role, version=version, base_version=base_version,
-            ssh_user=ssh_user or "root",
+            ssh_user="",
         )
         HostCommand.objects.create(
             op_id=f"build-{build.id}-start", host=host, operation="build-start",
@@ -747,31 +759,6 @@ def start_build(actor, *, host_id, role, version, base_version="", ssh_user="roo
         )
     DataRevision.bump()
     return build
-
-
-def run_build_command(actor, build_id, *, script, ssh_password=""):
-    """Queue an operator-authored command batch into the running build guest.
-
-    The SSH password rides the durable command payload while the agent needs
-    it and is scrubbed from the stored payload once the result lands."""
-    from .models import MachineBuild
-
-    if actor is None or not getattr(actor, "is_admin", False):
-        raise ServiceError("Administrator access is required.", 403)
-    with transaction.atomic():
-        build = MachineBuild.objects.select_for_update().get(pk=build_id)
-        if build.state != MachineBuild.State.READY:
-            raise ServiceError("The build guest is not ready (boot it first).", 409)
-        if not isinstance(script, str) or not script.strip():
-            raise ServiceError("The command batch is empty.")
-        command = HostCommand.objects.create(
-            op_id=f"build-{build.id}-exec-{secrets.token_hex(4)}", host=build.host,
-            operation="build-exec",
-            payload={"role": build.role, "script": script,
-                     "ssh_user": build.ssh_user, "ssh_password": ssh_password},
-            expected_generation=1,
-        )
-    return command
 
 
 def capture_build(actor, build_id):
@@ -793,12 +780,6 @@ def capture_build(actor, build_id):
                 return existing  # same capture already queued
         if build.state not in (MachineBuild.State.READY, MachineBuild.State.FAILED):
             raise ServiceError("Only an active build can be captured.", 409)
-        last = build.last_output or {}
-        if last.get("failed") or (last.get("exit_code") not in (None, 0)):
-            raise ServiceError(
-                "The last command batch failed. Re-run it successfully (or discard) "
-                "before capturing — broken provisioning must not become a template.", 409,
-            )
         command, created = HostCommand.objects.get_or_create(
             op_id=f"build-{build.id}-capture", host=build.host,
             defaults={
@@ -867,25 +848,9 @@ def _apply_build_result(command, ok):
     except MachineBuild.DoesNotExist:
         return
     detail = command.result or {}
-    if command.payload.get("ssh_password"):
-        command.payload = {k: v for k, v in command.payload.items() if k != "ssh_password"}
-        command.save(update_fields=("payload", "updated_at"))
     if command.operation == "build-start":
         build.state = MachineBuild.State.READY if ok else MachineBuild.State.FAILED
         build.vnc_port = detail.get("vnc_port", "") if ok else ""
-    elif command.operation == "build-exec":
-        build.guest_ip = detail.get("guest_ip", "") or build.guest_ip
-        failed = (not ok) or (detail.get("exit_code") not in (0, None))
-        entry = {
-            "at": timezone.now().isoformat(),
-            "script": (command.payload.get("script") or "")[:400],
-            "exit_code": detail.get("exit_code"),
-            "stdout": detail.get("stdout", "")[:4000],
-            "stderr": (detail.get("stderr") or detail.get("error", ""))[:2000],
-            "failed": failed,
-        }
-        build.last_output = entry
-        build.history = ([entry] + list(build.history or []))[:12]
     elif command.operation == "build-capture":
         if ok:
             sha, size = detail.get("sha256", ""), detail.get("size", 0)

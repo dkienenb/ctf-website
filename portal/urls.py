@@ -62,7 +62,6 @@ urlpatterns = [
     path("manage/machines", labs_manage_views.machine_images, name="manage-machine-images"),
     path("manage/machines/build", labs_manage_views.build_start, name="manage-build-start"),
     path("manage/machines/build/<int:build_id>", labs_manage_views.build_detail, name="manage-build"),
-    path("manage/machines/build/<int:build_id>/exec", labs_manage_views.build_exec, name="manage-build-exec"),
     path("manage/machines/build/<int:build_id>/action", labs_manage_views.build_action, name="manage-build-action"),
     path("manage/machines/build/<int:build_id>/console", labs_manage_views.build_console, name="manage-build-console"),
     path("manage/machines/new", labs_manage_views.machine_image_edit, name="manage-machine-image-new"),

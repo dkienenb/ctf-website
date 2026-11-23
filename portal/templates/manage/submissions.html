@@ -6,13 +6,14 @@
 <p class="muted small">Every counted attempt, newest first (last {{ rows|length }}). Raw text is retained privately for audit; the comparison value is what was matched.</p>
 <section class="panel">
   <table>
-    <thead><tr><th>When</th><th>Player</th><th>Challenge</th><th>Answer (comparison)</th><th>Correct</th><th>Counted</th></tr></thead>
+    <thead><tr><th>When</th><th>Player</th><th>Challenge</th><th>Question</th><th>Answer (comparison)</th><th>Correct</th><th>Counted</th></tr></thead>
     <tbody>
     {% for row in rows %}
       <tr>
         <td class="muted small">{{ row.submitted_at|date:"m-d H:i" }}</td>
         <td>{{ row.user.cached_name|default:row.user.discord_id }}</td>
         <td>{{ row.question.challenge.title }}</td>
+        <td class="muted small">{{ row.question.prompt|truncatechars:50 }}</td>
         <td><code>{{ row.answer|truncatechars:60 }}</code></td>
         <td>{% if row.correct %}✓{% else %}—{% endif %}</td>
         <td>{% if row.eligible %}yes{% else %}<span class="muted">excluded</span>{% endif %}</td>

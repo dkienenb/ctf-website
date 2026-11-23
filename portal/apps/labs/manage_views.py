@@ -11,6 +11,7 @@ from django.shortcuts import get_object_or_404, redirect, render
 from django.contrib import messages
 
 from portal.apps.accounts.decorators import admin_page
+from portal.apps.labs.guacamole import issue_build_grant, GrantError as BuildGrantError
 from .models import Host, MachineBuild, MachineImage
 from . import services as lab_services
 
@@ -35,8 +36,6 @@ class BuildStartForm(forms.Form):
     role = forms.ChoiceField(choices=MachineImage.Role.choices)
     base_version = forms.ChoiceField(required=False, help_text="Staged base to build from (filtered by role; empty = the demo pair on the workhorse).")
     version = forms.CharField(max_length=80, help_text="The new template version you're creating.")
-    ssh_user = forms.CharField(max_length=50, initial="root",
-                               help_text="SSH user inside the guest (for command batches).")
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -53,7 +52,9 @@ class BuildStartForm(forms.Form):
 @admin_page
 def build_start(request):
     active = MachineBuild.objects.filter(
-        state__in=(MachineBuild.State.STARTING, MachineBuild.State.READY)
+        state__in=(MachineBuild.State.STARTING, MachineBuild.State.READY,
+                             MachineBuild.State.CAPTURING, MachineBuild.State.DISCARDING,
+                             MachineBuild.State.FAILED)
     ).select_related("host")
     if request.method == "POST":
         form = BuildStartForm(request.POST)
@@ -65,7 +66,7 @@ def build_start(request):
                     role=form.cleaned_data["role"],
                     version=form.cleaned_data["version"].strip(),
                     base_version=form.cleaned_data["base_version"].strip(),
-                    ssh_user=form.cleaned_data["ssh_user"].strip(),
+                    
                 )
                 messages.success(request, "Build VM booting. Give it a moment, then open its console.")
                 return redirect("manage-build", build_id=build.id)
@@ -92,21 +93,6 @@ def build_detail(request, build_id):
         "console_url": f"/guacamole/{_host_slug(build.host.name)}/#/client/"
                        if settings.GUACAMOLE_INSTANCE_PATHS else None,
     })
-
-
-@admin_page
-def build_exec(request, build_id):
-
-    build = get_object_or_404(MachineBuild, pk=build_id)
-    if request.method == "POST":
-        script = request.POST.get("script", "")
-        password = request.POST.get("ssh_password", "")
-        try:
-            lab_services.run_build_command(request.user, build.id, script=script, ssh_password=password)
-            messages.success(request, "Command batch queued. Output appears here when it completes.")
-        except lab_services.ServiceError as error:
-            messages.error(request, error.message)
-    return redirect("manage-build", build_id=build.id)
 
 
 @admin_page
@@ -137,8 +123,8 @@ def build_console(request, build_id):
 
     build = get_object_or_404(MachineBuild.objects.select_related("host"), pk=build_id)
     try:
-        return redirect(lab_services.issue_build_grant(request.user, build))
-    except lab_services.GrantError as error:
+        return redirect(issue_build_grant(request.user, build))
+    except BuildGrantError as error:
         messages.error(request, error.message)
         return redirect("manage-build", build_id=build.id)
 

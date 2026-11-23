@@ -149,7 +149,7 @@ class HostCommand(models.Model):
         COMPLETED = "completed", "Completed"
         FAILED = "failed", "Failed"
 
-    op_id = models.CharField(max_length=64, unique=True)
+    op_id = models.CharField(max_length=100, unique=True)
     host = models.ForeignKey(Host, on_delete=models.CASCADE, related_name="commands")
     lab = models.ForeignKey("LabInstance", null=True, blank=True, on_delete=models.SET_NULL, related_name="commands")
     operation = models.CharField(max_length=30)  # allocate / save / reset-target / reset-full
