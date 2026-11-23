@@ -47,6 +47,13 @@ insert iptables FORWARD -i ctflab+ -d 10.0.0.0/8 -j DROP
 insert iptables FORWARD -i ctflab+ -d 172.16.0.0/12 -j DROP
 insert iptables FORWARD -i ctflab+ -d 192.168.0.0/16 -j DROP
 
+echo "==> IPv4: labs have NO egress at all (owner policy: offline labs;"
+echo "    supersedes the earlier 'internet allowed' §17 posture). Intra-lab"
+echo "    traffic never traverses FORWARD, so attacker<->target, DHCP and"
+echo "    DNS via libvirt's dnsmasq keep working. Re-enable egress per-"
+echo "    destination with ACCEPT rules inserted BEFORE this rule."
+insert iptables FORWARD -i ctflab+ ! -o ctflab+ -j DROP
+
 echo "==> IPv6: lab traffic may not leave its bridge, nor reach the host"
 insert ip6tables INPUT -i ctflab+ -j DROP
 insert ip6tables FORWARD -i ctflab+ ! -o ctflab+ -j DROP

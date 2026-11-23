@@ -30,6 +30,7 @@ check "FORWARD: cross-bridge lab traffic dropped" iptables -C FORWARD -i ctflab+
 check "FORWARD: labs cannot reach 10/8 (other labs)" iptables -C FORWARD -i ctflab+ -d 10.0.0.0/8 -j DROP
 check "FORWARD: labs cannot reach 172.16/12 (mgmt/home)" iptables -C FORWARD -i ctflab+ -d 172.16.0.0/12 -j DROP
 check "FORWARD: labs cannot reach 192.168/16 (home)" iptables -C FORWARD -i ctflab+ -d 192.168.0.0/16 -j DROP
+check "FORWARD: labs have no egress beyond their bridge" iptables -C FORWARD -i ctflab+ ! -o ctflab+ -j DROP
 check "ip6tables INPUT: lab bridges cannot reach host" ip6tables -C INPUT -i ctflab+ -j DROP
 check "ip6tables FORWARD: lab traffic stays on its bridge" sh -c "ip6tables -S FORWARD 2>/dev/null | grep -q 'ctflab+'"
 check "iptables rules live AND persisted at boot" sh -c "iptables-save | grep -q 'ctflab' && { test -f /etc/iptables/rules.v4 || command -v netfilter-persistent >/dev/null; }"
