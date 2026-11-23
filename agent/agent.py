@@ -562,6 +562,7 @@ class LibvirtExecutor:
                     hasher.update(block)
                     size += len(block)
             shutil.copy2(base_xml, staging / "domain.xml")
+            self._sanitize_captured_xml(staging / "domain.xml")
             # Publish atomically: the version directory appears complete or
             # not at all (a failed conversion leaves nothing behind).
             os.replace(staging, target_dir)
@@ -575,6 +576,21 @@ class LibvirtExecutor:
             "captured": f"{role}/{version}", "sha256": hasher.hexdigest(),
             "size": size, "host_local": True,
         }
+
+    def _sanitize_captured_xml(self, xml_path):
+        """Strip build-time scaffolding from a captured template's XML.
+
+        The captured disk is an INSTALLED OS: it must boot its own disk, not
+        re-run whatever installer ISO the base template happened to carry.
+        Install media rides only in the build VM — remove the cdrom device
+        and the cdrom boot preference so the next scratch build from this
+        template boots straight into the captured system."""
+        text = xml_path.read_text()
+        text = re.sub(
+            r"\n?[ \t]*<disk type='file' device='cdrom'>.*?</disk>",
+            "", text, flags=re.DOTALL)
+        text = re.sub(r"\n?[ \t]*<boot dev='cdrom'/>", "", text)
+        xml_path.write_text(text)
 
     def build_discard(self, command):
         """Destroy the build guest and its scratch disk without capturing."""

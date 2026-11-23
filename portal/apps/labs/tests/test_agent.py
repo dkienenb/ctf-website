@@ -250,6 +250,38 @@ class AgentExecutorTests(TestCase):
                     "op_id": "c2", "operation": "build-capture",
                     "payload": {"role": "attacker", "version": "kali-v9", "base_version": ""}})
             self.assertIn("already exists", str(error.exception))
+
+    def test_build_capture_strips_install_media_scaffolding(self):
+        """A captured OS must boot its own disk, not the installer ISO the
+        base template carried: the cdrom device and cdrom boot preference
+        are build-time scaffolding and do not ride into the template."""
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmp:
+            executor = self._executor(tmp)
+            (executor.images_dir / "attacker").mkdir(parents=True)
+            (executor.images_dir / "attacker" / "domain.xml").write_text(
+                "<domain type='kvm'>\n  <name>@NAME@</name>\n  <os>\n    <boot dev='cdrom'/>\n"
+                "    <boot dev='hd'/>\n  </os>\n  <devices>\n"
+                "    <disk type='file' device='disk'>\n      <source file='@DISK@'/>\n"
+                "    </disk>\n    <disk type='file' device='cdrom'>\n"
+                "      <source file='/var/lib/libvirt/images/demo.iso'/>\n"
+                "      <target dev='sdc' bus='sata'/>\n    </disk>\n"
+                "  </devices>\n</domain>")
+            executor.existing = {"ctf-build-attacker"}
+            executor.domain_state = lambda name: "shut off"
+            executor._compact_disk = lambda src, dst: dst.write_bytes(b"installed-disk")
+            (executor.disks_dir / "ctf-build-attacker.qcow2").write_bytes(b"dirty")
+            workhorse_agent.execute(executor, {
+                "op_id": "c3", "operation": "build-capture",
+                "payload": {"role": "attacker", "version": "kali-base", "base_version": ""}})
+            xml = (executor.images_dir / "attacker" / "kali-base" / "domain.xml").read_text()
+            self.assertNotIn("device='cdrom'", xml)
+            self.assertNotIn("boot dev='cdrom'", xml)
+            self.assertIn("boot dev='hd'", xml)
+            # Placeholders and the real disk device survive the strip.
+            self.assertIn("@NAME@", xml)
+            self.assertIn("@DISK@", xml)
     def test_vocabulary_remains_restricted_and_closed(self):
         with self.assertRaises(workhorse_agent.AgentError):
             workhorse_agent.execute(None, {"operation": "shell", "payload": {"cmd": "rm -rf /"}})
