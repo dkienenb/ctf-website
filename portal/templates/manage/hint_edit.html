@@ -4,14 +4,35 @@
 <p><a href="{% url 'manage' %}">← Back to administration</a></p>
 <h1>Edit hint</h1>
 <p class="muted small">{{ hint.challenge.title }}. Existing owners' deductions change retroactively.</p>
+
 <section class="panel">
   <h2>Price &amp; content</h2>
   <form method="post">
     {% csrf_token %}
-    {% include "manage/_labeled_form.html" with form=form %}
+    <div class="field">
+      <label for="id_cost">Cost</label>
+      <input type="number" name="cost" id="id_cost" min="0" required
+             value="{{ preview_cost|default:form.cost.value|default:hint.cost }}">
+    </div>
+    <div class="field">
+      <label for="id_description">Description</label>
+      <input type="text" name="description" id="id_description" maxlength="500" required
+             value="{{ preview_description|default:form.description.value|default:hint.description }}">
+    </div>
+    <div class="field">
+      <label for="id_text">Text</label>
+      <textarea name="text" id="id_text" rows="3" required>{{ preview_text|default:form.text.value|default:hint.text }}</textarea>
+    </div>
+    <div class="field">
+      <label for="id_reason">Audit reason</label>
+      <input type="text" name="reason" id="id_reason" maxlength="500" required
+             value="{{ preview_reason|default:'' }}">
+      <span class="muted small">Why this change is being made (recorded in the audit log).</span>
+    </div>
     <button class="btn primary" type="submit" name="preview" value="1">Preview impact</button>
   </form>
 </section>
+
 {% if preview %}
 <section class="panel">
   <h2>Impact preview</h2>
@@ -22,13 +43,13 @@
       <span>{{ effect.before }} → {{ effect.after }} pts ({{ effect.score_delta }})</span>
     </div>
   {% empty %}<p>No existing redemptions use this price.</p>{% endfor %}
+
   <form method="post">
     {% csrf_token %}
-    {{ form.as_hidden }}
-    <div class="field">
-      <label for="id_reason_apply">Audit reason (confirm)</label>
-      <input type="text" name="reason" id="id_reason_apply" value="{{ form.reason.value|default:'' }}" required>
-    </div>
+    <input type="hidden" name="cost" value="{{ preview_cost }}">
+    <input type="hidden" name="description" value="{{ preview_description }}">
+    <input type="hidden" name="text" value="{{ preview_text }}">
+    <input type="hidden" name="reason" value="{{ preview_reason }}">
     <input type="hidden" name="expected_revision" value="{{ preview.revision }}">
     <button class="btn primary" type="submit" name="apply" value="1">Apply this revision</button>
   </form>

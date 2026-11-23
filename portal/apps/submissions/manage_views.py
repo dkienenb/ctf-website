@@ -309,34 +309,53 @@ def AcceptedAnswer_values(question):
 
 
 @admin_page
+@admin_page
 def hint_edit(request, hint_id):
+    """Edit a hint's price and content. Two-phase: preview, then apply."""
     hint = get_object_or_404(Hint.objects.select_related("challenge"), pk=hint_id)
-    initial = {"cost": hint.cost, "description": hint.description, "text": hint.text}
-    form = HintEditForm(data=request.POST or None, initial=initial)
-    preview = None
-    if request.method == "POST" and form.is_valid():
-        data = {key: form.cleaned_data[key] for key in ("cost", "description", "text")}
+
+    if request.method == "POST":
+        form = HintEditForm(request.POST)
+        if not form.is_valid():
+            messages.error(request, "Check the form fields.")
+            return render(request, "manage/hint_edit.html",
+                          {"hint": hint, "form": form})
+
+        cost = form.cleaned_data["cost"]
+        description = form.cleaned_data["description"]
+        text = form.cleaned_data["text"]
+        reason = form.cleaned_data["reason"]
+
         if "preview" in request.POST:
             try:
-                preview = adminops.preview_hint_edit(hint, **data)
+                preview = adminops.preview_hint_edit(hint, cost=cost, description=description, text=text)
             except adminops.ServiceError as error:
                 messages.error(request, error.message)
-        elif "apply" in request.POST:
+                preview = None
+            # Re-render with the bound form (carries the operator's input)
+            return render(request, "manage/hint_edit.html",
+                          {"hint": hint, "form": form, "preview": preview,
+                           "preview_cost": cost, "preview_description": description,
+                           "preview_text": text, "preview_reason": reason})
+
+        if "apply" in request.POST:
+            expected = request.POST.get("expected_revision", "")
             try:
                 result = adminops.apply_hint_edit(
-                    request.user, hint,
-                    reason=form.cleaned_data["reason"],
-                    expected_revision=int(request.POST.get("expected_revision", -1)),
-                    **data,
+                    request.user, hint, cost=cost, description=description,
+                    text=text, reason=reason, expected_revision=int(expected),
                 )
                 messages.success(request, result["message"])
-                return redirect("manage")
-            except (adminops.ServiceError, ValueError) as error:
-                messages.error(request, getattr(error, "message", "Apply failed."))
-                return redirect("manage-hint-edit", hint_id=hint.id)
-    elif request.method == "POST":
-        messages.error(request, "Check the form fields.")
-    return render(request, "manage/hint_edit.html", {"hint": hint, "form": form, "preview": preview})
+            except adminops.ServiceError as error:
+                messages.error(request, error.message)
+            return redirect("manage-hint-edit", hint_id=hint.id)
+
+        # Neither preview nor apply: fall through to a clean render
+        form = HintEditForm(initial={"cost": hint.cost, "description": hint.description, "text": hint.text})
+    else:
+        form = HintEditForm(initial={"cost": hint.cost, "description": hint.description, "text": hint.text})
+
+    return render(request, "manage/hint_edit.html", {"hint": hint, "form": form})
 
 
 @admin_page
