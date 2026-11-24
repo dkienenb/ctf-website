@@ -74,6 +74,7 @@
           {% with lease=lab.leases.all|first %}
             <p>Lease ends {{ lease.expires_at|date:"H:i" }} (UTC).</p>
           {% endwith %}
+          <p class="muted small">Lab network: <code>10.{{ lab.id }}.0.0/24</code> · your target: <code>10.{{ lab.id }}.0.10</code> (also resolves as <code>target</code> from the attacker).</p>
           <div class="button-row">
             <a class="btn primary" href="{% url 'lab-desktop' challenge.slug %}" target="_blank" rel="noopener">Open browser desktop ↗</a>
             <form method="post" action="{% url 'lab-action' challenge.slug 'refresh' %}">{% csrf_token %}<button class="btn secondary" type="submit">Refresh lease</button></form>
