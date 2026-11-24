@@ -26,6 +26,9 @@ check "no shared ctf-demo-lab network remains" sh -c "! virsh net-list --all --n
 
 echo "== Host firewall (isolation-install.sh rules) =="
 check "INPUT: lab bridges cannot reach host" iptables -C INPUT -i ctflab+ -j DROP
+check "INPUT: lab DHCP to gateway allowed" iptables -C INPUT -i ctflab+ -p udp --dport 67 -j ACCEPT
+check "INPUT: lab DNS (udp) to gateway allowed" iptables -C INPUT -i ctflab+ -p udp --dport 53 -j ACCEPT
+check "INPUT: lab DNS (tcp) to gateway allowed" iptables -C INPUT -i ctflab+ -p tcp --dport 53 -j ACCEPT
 check "FORWARD: cross-bridge lab traffic dropped" iptables -C FORWARD -i ctflab+ -o ctflab+ -j DROP
 check "FORWARD: labs cannot reach 10/8 (other labs)" iptables -C FORWARD -i ctflab+ -d 10.0.0.0/8 -j DROP
 check "FORWARD: labs cannot reach 172.16/12 (mgmt/home)" iptables -C FORWARD -i ctflab+ -d 172.16.0.0/12 -j DROP

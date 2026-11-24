@@ -12,9 +12,11 @@
 #
 #   Lab to other labs       blocked (this script + libvirt REJECT)
 #   Lab to home/mgmt LAN    blocked (RFC1918 FORWARD drops)
-#   Lab to host services    blocked (INPUT drop; libvirt DHCP/DNS stays above)
-#   Lab to internet         allowed via NAT (§17: "restricted initially";
-#                           tighten with destination allow-lists later)
+#   Lab to host services    blocked (INPUT drop; the gateway's DHCP/DNS
+#                           are explicitly allowed — that's dnsmasq)
+#   Lab to internet         blocked (owner policy: offline labs; the
+#                           FORWARD egress drop supersedes §17's original
+#                           "restricted" NAT posture)
 #   IPv6                    no RA/global v6 on lab nets; link-local only, and
 #                           ip6tables blocks any lab traffic leaving the bridge
 set -e
@@ -35,7 +37,13 @@ insert() { # insert <table-family cmd> <chain> <rule spec...>
   fi
 }
 
-echo "==> IPv4: labs cannot reach host services"
+echo "==> IPv4: labs cannot reach host services — EXCEPT the lab's own"
+echo "    DHCP/DNS (libvirt's dnsmasq on the gateway). Our ACCEPTs sit above"
+echo "    our own DROP, so guest DHCP renewals and 'target' resolution work"
+echo "    regardless of where libvirt inserted its own rules."
+insert iptables INPUT -i ctflab+ -p udp --dport 67 -j ACCEPT
+insert iptables INPUT -i ctflab+ -p udp --dport 53 -j ACCEPT
+insert iptables INPUT -i ctflab+ -p tcp --dport 53 -j ACCEPT
 insert iptables INPUT -i ctflab+ -j DROP
 
 echo "==> IPv4: labs cannot route to other labs' bridges"
