@@ -1,0 +1,62 @@
+{% extends "base.html" %}
+{% block title %}Lab templates — Administration{% endblock %}
+{% block content %}
+<p><a href="{% url 'manage' %}">← Back to administration</a> · <a href="{% url 'manage-machine-images' %}">Machine images</a></p>
+<h1>Lab templates</h1>
+<p class="muted small">Which machine images each challenge's lab runs, and the per-role sizing recorded at pin time. To change a challenge's pin, use its edit page — this is the fleet view. Versions are role-scoped: an attacker image can never serve as a target.</p>
+
+{% if rows %}
+<section class="panel">
+  <table>
+    <thead>
+      <tr>
+        <th>Challenge</th>
+        <th>Attacker</th>
+        <th>Target</th>
+        <th>Attacker sizing</th>
+        <th>Target sizing</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for row in rows %}
+      <tr>
+        <td>
+          {% if row.template.challenge %}
+            <a href="{% url 'manage-content-edit' row.template.challenge.id %}">{{ row.template.challenge.title }}</a>
+          {% else %}
+            <span class="muted small">Orphaned (challenge removed) — safe to ignore or re-pin via a new challenge</span>
+          {% endif %}
+        </td>
+        <td>
+          {% if row.attacker.chip == 'demo' %}
+            <span class="muted small">{{ row.attacker.label }}</span>
+          {% else %}
+            <code>{{ row.template.attacker_version }}</code>
+            {% if row.attacker.chip == 'ok' %}<span class="muted small">ready</span>
+            {% elif row.attacker.chip == 'incomplete' %}<strong class="error">{{ row.attacker.label }}</strong>
+            {% else %}<strong class="error">{{ row.attacker.label }}</strong>{% endif %}
+          {% endif %}
+        </td>
+        <td>
+          {% if row.target.chip == 'demo' %}
+            <span class="muted small">{{ row.target.label }}</span>
+          {% else %}
+            <code>{{ row.template.target_version }}</code>
+            {% if row.target.chip == 'ok' %}<span class="muted small">ready</span>
+            {% elif row.target.chip == 'incomplete' %}<strong class="error">{{ row.target.label }}</strong>
+            {% else %}<strong class="error">{{ row.target.label }}</strong>{% endif %}
+          {% endif %}
+        </td>
+        <td class="muted small">{{ row.template.attacker_ram_mb }} MB · {{ row.template.attacker_vcpu }} vCPU · {{ row.template.attacker_disk_gb }} GB</td>
+        <td class="muted small">{{ row.template.target_ram_mb }} MB · {{ row.template.target_vcpu }} vCPU · {{ row.template.target_disk_gb }} GB</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</section>
+{% else %}
+<section class="panel">
+  <p>No challenge has a pinned machine template yet. Pin one from a challenge's edit page.</p>
+</section>
+{% endif %}
+{% endblock %}

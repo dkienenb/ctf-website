@@ -47,7 +47,7 @@
 
 <section class="panel">
   <h2>Machine template</h2>
-  <p class="muted small">Pin which machine images this challenge's lab uses (see <a href="{% url 'manage-machine-images' %}">machine images</a>). Leave a version empty to use the workhorse's demo template. Existing labs keep their current template.</p>
+  <p class="muted small">Pin which machine images this challenge's lab uses (see <a href="{% url 'manage-machine-images' %}">machine images</a> · <a href="{% url 'manage-lab-templates' %}">lab templates overview</a>). Leave a version empty to use the workhorse's demo template. Existing labs keep their current template.</p>
   <form method="post" action="{% url 'manage-lab-template' challenge.id %}">
     {% csrf_token %}
     {{ lab_template_form.as_p }}

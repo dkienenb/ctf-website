@@ -4,7 +4,7 @@
 <p><a href="{% url 'manage' %}">← Back to administration</a></p>
 <h1>Machine images</h1>
 <p class="muted">Versioned base machines for labs (one attacker + one target per challenge template). A version pins the domain.xml and the uploaded base disk; allocation never silently substitutes another version. Upload happens here on the LAN — large disks must not go through the Cloudflare proxy.</p>
-<p><a class="btn primary" href="{% url 'manage-machine-image-new' %}">New machine image</a></p>
+<p><a class="btn primary" href="{% url 'manage-machine-image-new' %}">New machine image</a> <a class="btn" href="{% url 'manage-lab-templates' %}">Lab templates overview</a></p>
 
 {% if hosts %}
 <p class="muted small">Workhorse inventory is refreshed by each agent heartbeat ({{ hosts|length }} host{{ hosts|pluralize }}).</p>

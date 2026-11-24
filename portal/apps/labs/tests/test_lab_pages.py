@@ -114,3 +114,59 @@ class RegisterHostCommandTests(TestCase):
         host.refresh_from_db()
         self.assertEqual(host.capacity_slots, 3)
         self.assertNotEqual(host.token_hash, first_hash)  # re-registration rotates credentials
+
+
+@override_settings(GUACAMOLE_JSON_SECRET="ab" * 16)
+class LabTemplatesPageTests(TestCase):
+    """The fleet view of every challenge's pinned machine template."""
+
+    def setUp(self):
+        self.admin = make_user("930000000000000009", "Admin", is_admin=True)
+        self.user = make_user("930000000000000010", "Player")
+        self.challenge = make_lab_challenge()  # pins kali-v1 / target-v1
+
+    def test_admin_sees_pinned_versions_and_sizing(self):
+        self.client.force_login(self.admin)
+        response = self.client.get(reverse("manage-lab-templates"))
+        self.assertEqual(response.status_code, 200)
+        content = response.content.decode()
+        self.assertIn("kali-v1", content)
+        self.assertIn("target-v1", content)
+        self.assertIn("4096 MB", content)   # attacker sizing recorded at pin time
+        self.assertIn("2048 MB", content)   # target sizing
+
+    def test_versions_are_chipped_by_library_state(self):
+        from portal.apps.labs.models import MachineImage
+        MachineImage.objects.create(role="attacker", version="kali-v1",
+                                    domain_xml="<x/>")  # record without a disk
+        self.client.force_login(self.admin)
+        response = self.client.get(reverse("manage-lab-templates"))
+        content = response.content.decode()
+        # attacker kali-v1 exists but has no disk → incomplete chip
+        self.assertIn("no backing disk", content)
+        # target-v1 has no record at all → missing chip
+        self.assertIn("not in the image library", content)
+
+    def test_empty_versions_show_the_demo_label(self):
+        from portal.apps.labs.models import LabTemplate
+        LabTemplate.objects.update(attacker_version="", target_version="")
+        self.client.force_login(self.admin)
+        response = self.client.get(reverse("manage-lab-templates"))
+        self.assertContains(response, "Demo template")
+
+    def test_non_admins_are_bounced(self):
+        self.client.force_login(self.user)
+        self.assertEqual(self.client.get(reverse("manage-lab-templates")).status_code, 302)
+
+    def test_anonymous_are_bounced(self):
+        self.assertEqual(self.client.get(reverse("manage-lab-templates")).status_code, 302)
+
+    def test_orphaned_template_renders_without_a_challenge_link(self):
+        """SET_NULL leaves LabTemplate rows whose challenge was deleted;
+        the fleet view renders them as orphans instead of crashing."""
+        from portal.apps.labs.models import LabTemplate
+        LabTemplate.objects.update(challenge=None)
+        self.client.force_login(self.admin)
+        response = self.client.get(reverse("manage-lab-templates"))
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Orphaned")

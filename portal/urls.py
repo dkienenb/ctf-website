@@ -60,6 +60,7 @@ urlpatterns = [
     path("manage/preapprove", manage_views.preapprove_action, name="manage-preapprove"),
     path("manage/submissions", manage_views.submissions_page, name="manage-submissions"),
     path("manage/machines", labs_manage_views.machine_images, name="manage-machine-images"),
+    path("manage/machines/lab-templates", labs_manage_views.lab_templates, name="manage-lab-templates"),
     path("manage/machines/build", labs_manage_views.build_start, name="manage-build-start"),
     path("manage/machines/build/<int:build_id>", labs_manage_views.build_detail, name="manage-build"),
     path("manage/machines/build/<int:build_id>/action", labs_manage_views.build_action, name="manage-build-action"),

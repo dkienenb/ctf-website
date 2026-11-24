@@ -12,7 +12,7 @@ from django.contrib import messages
 
 from portal.apps.accounts.decorators import admin_page
 from portal.apps.labs.guacamole import issue_build_grant_flow, GrantError as BuildGrantError
-from .models import Host, MachineBuild, MachineImage
+from .models import Host, LabTemplate, MachineBuild, MachineImage
 from . import services as lab_services
 
 
@@ -138,6 +138,43 @@ def build_console(request, build_id):
         messages.error(request, error.message)
         return redirect("manage-build", build_id=build.id)
     return render(request, "labs/console_bridge.html", flow)
+
+
+@admin_page
+def lab_templates(request):
+    """Overview of every challenge's pinned machine template: versions,
+    sizing, and whether each referenced version actually exists with a
+    distributable disk. Pinning itself stays on the challenge edit page —
+    this is the read-only fleet view."""
+    from portal.apps.submissions.manage_views import LabTemplateForm
+
+    templates = (LabTemplate.objects.select_related("challenge")
+                 .order_by("challenge__title"))
+    images = {(image.role, image.version): image
+              for image in MachineImage.objects.all()}
+
+    def status(role, version):
+        if not version:
+            return {"chip": "demo", "image": None,
+                    "label": "Demo template (workhorse default)"}
+        image = images.get((role, version))
+        if image is None:
+            return {"chip": "missing", "image": None,
+                    "label": "Version not in the image library"}
+        if not image.disk_file:
+            return {"chip": "incomplete", "image": image,
+                    "label": "Record exists but has no backing disk"}
+        return {"chip": "ok", "image": image, "label": "Ready"}
+
+    rows = [{
+        "template": template,
+        "attacker": status(MachineImage.Role.ATTACKER, template.attacker_version),
+        "target": status(MachineImage.Role.TARGET, template.target_version),
+    } for template in templates]
+    return render(request, "manage/lab_templates.html", {
+        "rows": rows,
+        "form": LabTemplateForm(),  # version choices, for reference columns
+    })
 
 
 @admin_page
