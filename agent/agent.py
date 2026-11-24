@@ -663,37 +663,67 @@ class LibvirtExecutor:
         """The target's pinned lab address: 10.<lab>.0.10."""
         return f"10.{int(lab_id)}.0.10"
 
-    def _ensure_lab_net(self, lab_id):
-        """Define/start this lab's isolated network if not already active.
-
-        Cross-lab and lab-to-host isolation is enforced by the host firewall
-        (isolation-install.sh) plus libvirt's own per-network FORWARD rules;
-        the agent never touches iptables (it runs without CAP_NET_ADMIN).
-        """
-        net = self.lab_net(lab_id)
-        code, out = self.virsh_probe("net-info", net["name"])
-        if code == 0 and "Active:     yes" in out:
-            self._ensure_target_dns(net, lab_id)
-            return net
-        xml = (
-            "<network>\n"
+    def _lab_net_xml(self, lab_id, net):
+        """The lab network definition: NAT bridge, DHCP range, the target's
+        DHCP pin + DNS name, and HERMETIC DNS — dnsmasq has no upstream at
+        all, so only lab-local names (target / target.lab) resolve and
+        every other query gets NXDOMAIN. Labs never touch outside DNS."""
+        return (
+            "<network xmlns:dnsmasq='http://libvirt.org/schemas/network/dnsmasq/1.0'>\n"
             f"  <name>{net['name']}</name>\n"
             f"  <bridge name='{net['bridge']}' stp='off' delay='0'/>\n"
             "  <forward mode='nat'/>\n"
+            "  <domain name='lab' localOnly='yes'/>\n"
+            "  <dns forwardPlainNames='no'/>\n"
             f"  <ip address='{net['gateway']}' netmask='255.255.255.0'>\n"
             "    <dhcp>\n"
             f"      <range start='{net['dhcp_start']}' end='{net['dhcp_end']}'/>\n"
             f"      <host mac='{self.target_mac(lab_id)}' name='target' ip='{self.target_ip(lab_id)}'/>\n"
             "    </dhcp>\n"
             "  </ip>\n"
+            "  <dnsmasq:options>\n"
+            "    <dnsmasq:option value='no-resolv'/>\n"
+            "  </dnsmasq:options>\n"
             "</network>\n"
         )
+
+    def _ensure_lab_net(self, lab_id):
+        """Define/start this lab's isolated network if not already active.
+
+        Cross-lab and lab-to-host isolation is enforced by the host firewall
+        (isolation-install.sh) plus libvirt's own per-network FORWARD rules;
+        the agent never touches iptables (it runs without CAP_NET_ADMIN).
+        Networks defined before the hermetic-DNS change are redefined when
+        nothing is attached to them (a released lab's guests are undefined,
+        so at allocate time the net is empty; a preserved recovery attacker
+        keeps its net untouched)."""
+        net = self.lab_net(lab_id)
         xml_path = self.disks_dir / f"{net['name']}.xml"
-        xml_path.write_text(xml)
-        if code != 0:
+        xml_path.write_text(self._lab_net_xml(lab_id, net))
+        code, out = self.virsh_probe("net-info", net["name"])
+        defined = code == 0
+        active = defined and "Active:     yes" in out
+        if defined and active:
+            dump_code, dump = self.virsh_probe("net-dumpxml", net["name"])
+            if dump_code == 0 and "localOnly" not in dump:
+                if "connections='0'" in dump or "connections=" not in dump:
+                    if "connections=" not in dump:
+                        print(f"agent: {net['name']} predates hermetic DNS but "
+                              "reports no attachment count; leaving it alone",
+                              file=sys.stderr)
+                    else:
+                        self.virsh_tolerant("net-destroy", net["name"])
+                        self.virsh_tolerant("net-undefine", net["name"])
+                        defined = active = False
+                else:
+                    print(f"agent: {net['name']} has attached guests; its DNS "
+                          "stays upstream-forwarding until the lab is fully recycled",
+                          file=sys.stderr)
+        if not defined:
             self.virsh("net-define", str(xml_path))
-        self.virsh_tolerant("net-autostart", net["name"])
-        self.virsh_tolerant("net-start", net["name"])
+        if not active:
+            self.virsh_tolerant("net-autostart", net["name"])
+            self.virsh_tolerant("net-start", net["name"])
         self._ensure_target_dns(net, lab_id)
         return net
 

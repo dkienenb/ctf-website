@@ -425,6 +425,10 @@ class AgentExecutorTests(TestCase):
             net_xml = (executor.disks_dir / "ctf-lab1-net.xml").read_text()
             self.assertIn(
                 "<host mac='52:54:00:aa:01:01' name='target' ip='10.1.0.10'/>", net_xml)
+            # Hermetic DNS: no upstream at all — only lab-local names resolve.
+            self.assertIn("localOnly='yes'", net_xml)
+            self.assertIn("forwardPlainNames='no'", net_xml)
+            self.assertIn("no-resolv", net_xml)
             self.assertEqual(executor.target_mac(1), "52:54:00:aa:01:01")
             self.assertEqual(executor.target_ip(250), "10.250.0.10")
 
@@ -701,3 +705,80 @@ class AgentExecutorTests(TestCase):
             xml = (executor.disks_dir / "ctf-build-target.xml").read_text()
             self.assertIn("<graphics type='vnc' port='6911'", xml)  # injected
 
+
+
+class LabNetUpgradeTests(TestCase):
+    """Lab networks defined before hermetic DNS get redefined when empty."""
+
+    def _executor(self, tmp):
+        return AgentExecutorTests._executor(self, tmp)
+
+    def test_prehermetic_net_is_upgraded_when_nothing_is_attached(self):
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmp:
+            executor = self._executor(tmp)
+            for role in ("attacker", "target"):
+                directory = executor.images_dir / role
+                directory.mkdir(parents=True)
+                (directory / "domain.xml").write_text(
+                    "<domain><name>@NAME@</name><disk>@DISK@</disk>"
+                    "<interface type='network'><source network='@LAB_NET@'/></interface></domain>")
+            # net active but pre-hermetic (dump lacks localOnly) and empty
+            # (connections='0') → destroy + undefine + redefine hermetic.
+            executor.probes = {
+                "net-info": (0, "Active:     yes\nPersistent: yes\nAutostart: on"),
+                "net-dumpxml": (0, "<network connections='0'><name>ctf-lab1-net</name></network>"),
+            }
+            command = {"op_id": "abc123def456", "operation": "allocate", "payload": {"lab": 1}, "lab": 1}
+            workhorse_agent.execute(executor, command)
+            destroyed = [call for call in executor.calls if call[0] == "net-destroy"]
+            undefined = [call for call in executor.calls if call[0] == "net-undefine"]
+            defines = [call for call in executor.calls if call[0] == "net-define"]
+            self.assertEqual(len(destroyed), 1)
+            self.assertEqual(len(undefined), 1)
+            self.assertEqual(len(defines), 1)
+            # The redefinition is hermetic (the define call passes the path;
+            # the rewritten XML file carries the hermetic markers).
+            self.assertIn("localOnly='yes'",
+                          (executor.disks_dir / "ctf-lab1-net.xml").read_text())
+
+    def test_prehermetic_net_with_guests_is_left_alone(self):
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmp:
+            executor = self._executor(tmp)
+            for role in ("attacker", "target"):
+                directory = executor.images_dir / role
+                directory.mkdir(parents=True)
+                (directory / "domain.xml").write_text(
+                    "<domain><name>@NAME@</name><disk>@DISK@</disk>"
+                    "<interface type='network'><source network='@LAB_NET@'/></interface></domain>")
+            executor.probes = {
+                "net-info": (0, "Active:     yes\nPersistent: yes\nAutostart: on"),
+                "net-dumpxml": (0, "<network connections='1'><name>ctf-lab1-net</name></network>"),
+            }
+            command = {"op_id": "abc123def456", "operation": "allocate", "payload": {"lab": 1}, "lab": 1}
+            workhorse_agent.execute(executor, command)
+            destroyed = [call for call in executor.calls if call[0] == "net-destroy"]
+            self.assertEqual(destroyed, [])  # guests attached: never touched
+
+    def test_hermetic_net_is_not_redefined(self):
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmp:
+            executor = self._executor(tmp)
+            for role in ("attacker", "target"):
+                directory = executor.images_dir / role
+                directory.mkdir(parents=True)
+                (directory / "domain.xml").write_text(
+                    "<domain><name>@NAME@</name><disk>@DISK@</disk>"
+                    "<interface type='network'><source network='@LAB_NET@'/></interface></domain>")
+            executor.probes = {
+                "net-info": (0, "Active:     yes\nPersistent: yes\nAutostart: on"),
+                "net-dumpxml": (0, "<network connections='0'><domain name='lab' localOnly='yes'/></network>"),
+            }
+            command = {"op_id": "abc123def456", "operation": "allocate", "payload": {"lab": 1}, "lab": 1}
+            workhorse_agent.execute(executor, command)
+            defines = [call for call in executor.calls if call[0] == "net-define"]
+            self.assertEqual(defines, [])  # already hermetic: untouched
