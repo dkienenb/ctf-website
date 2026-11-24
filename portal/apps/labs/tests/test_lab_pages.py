@@ -8,7 +8,7 @@ from django.test import TestCase, override_settings
 from django.urls import reverse
 
 from portal.apps.accounts.models import User
-from portal.apps.labs.models import Host, LabInstance, QueueEntry
+from portal.apps.labs.models import Host, LabInstance, LabTemplate, QueueEntry
 from portal.apps.testutils import complete, make_host, make_lab_challenge, make_user
 
 
@@ -170,3 +170,137 @@ class LabTemplatesPageTests(TestCase):
         response = self.client.get(reverse("manage-lab-templates"))
         self.assertEqual(response.status_code, 200)
         self.assertContains(response, "Orphaned")
+
+
+@override_settings(GUACAMOLE_JSON_SECRET="ab" * 16)
+class LabPresetFlowTests(TestCase):
+    """Challenges pick a preconfigured lab from a dropdown (or none);
+    pinning COPIES the preset's values."""
+
+    def setUp(self):
+        self.admin = make_user("940000000000000009", "Admin", is_admin=True)
+        self.user = make_user("940000000000000010", "Player")
+        self.challenge = make_lab_challenge()  # pins kali-v1 / target-v1
+        self.client.force_login(self.admin)
+        # The seeded Kali pair references these versions; create the records
+        # so pin validation passes (the live system has them).
+        from portal.apps.labs.models import MachineImage
+        MachineImage.objects.get_or_create(
+            role="attacker", version="kali-base-v1",
+            defaults={"domain_xml": "<domain/>", "disk_sha256": "a" * 64})
+        MachineImage.objects.get_or_create(
+            role="target", version="kali-target-v1",
+            defaults={"domain_xml": "<domain/>", "disk_sha256": "a" * 64})
+
+    def _presets(self):
+        from portal.apps.labs.models import LabPreset
+        return {p.name: p for p in LabPreset.objects.all()}
+
+    def test_seed_migration_created_both_defaults(self):
+        presets = self._presets()
+        self.assertIn("Kali pair", presets)
+        self.assertIn("Demo pair", presets)
+        self.assertEqual(presets["Kali pair"].attacker_version, "kali-base-v1")
+        self.assertEqual(presets["Kali pair"].target_version, "kali-target-v1")
+        self.assertEqual(presets["Demo pair"].attacker_version, "")
+
+    def test_dropdown_pins_the_preset_values(self):
+        preset = self._presets()["Kali pair"]
+        response = self.client.post(
+            reverse("manage-lab-template-preset", args=[self.challenge.id]),
+            {"preset": preset.id})
+        self.assertEqual(response.status_code, 302)
+        # Fetch fresh: the fixture pre-populated the challenge's cached
+        # reverse OneToOne with the pre-pin template object.
+        template = LabTemplate.objects.get(challenge=self.challenge)
+        self.assertEqual(template.attacker_version, "kali-base-v1")
+        self.assertEqual(template.target_version, "kali-target-v1")
+        self.assertEqual(template.attacker_ram_mb, 4096)
+        self.assertEqual(template.target_ram_mb, 2048)
+
+    def test_none_clears_the_lab(self):
+        from portal.apps.labs.models import LabTemplate
+        preset = self._presets()["Kali pair"]
+        self.client.post(reverse("manage-lab-template-preset", args=[self.challenge.id]),
+                         {"preset": preset.id})
+        response = self.client.post(
+            reverse("manage-lab-template-preset", args=[self.challenge.id]),
+            {"preset": "none"})
+        self.assertEqual(response.status_code, 302)
+        self.assertFalse(LabTemplate.objects.filter(challenge=self.challenge).exists())
+
+    def test_content_edit_preselects_the_matching_preset(self):
+        preset = self._presets()["Kali pair"]
+        self.client.post(reverse("manage-lab-template-preset", args=[self.challenge.id]),
+                         {"preset": preset.id})
+        response = self.client.get(reverse("manage-content-edit", args=[self.challenge.id]))
+        content = response.content.decode()
+        self.assertIn(f'value="{preset.id}"', content)
+        self.assertIn("matches “Kali pair”", content)
+        # The "choose" placeholder is not selected once a lab is pinned.
+        self.assertNotIn('<option value="" disabled selected', content)
+
+    def test_custom_pins_report_no_matching_preset(self):
+        # The fixture pin (kali-v1/target-v1) matches no seeded preset.
+        response = self.client.get(reverse("manage-content-edit", args=[self.challenge.id]))
+        self.assertContains(response, "no preset matches")
+
+    def test_preset_create_edit_delete_on_the_lab_templates_page(self):
+        from portal.apps.labs.models import LabPreset
+        payload = {"name": "Tiny pair", "attacker_version": "kali-base-v1",
+                   "target_version": "", "attacker_ram_mb": 1024, "attacker_vcpu": 1,
+                   "attacker_disk_gb": 20, "target_ram_mb": 512, "target_vcpu": 1,
+                   "target_disk_gb": 10, "notes": "lightweight"}
+        response = self.client.post(reverse("manage-lab-preset-save"), payload)
+        self.assertEqual(response.status_code, 302)
+        preset = LabPreset.objects.get(name="Tiny pair")
+        self.assertEqual(preset.attacker_ram_mb, 1024)
+        # Duplicate names refused.
+        dupe = dict(payload)
+        response = self.client.post(reverse("manage-lab-preset-save"), dupe)
+        self.assertFalse(LabPreset.objects.filter(name="Tiny pair").count() > 1)
+        # Edit.
+        response = self.client.get(reverse("manage-lab-preset-edit", args=[preset.id]))
+        self.assertContains(response, 'value="Tiny pair"')
+        payload["preset_id"] = preset.id
+        payload["attacker_ram_mb"] = 2048
+        self.client.post(reverse("manage-lab-preset-save"), payload)
+        preset.refresh_from_db()
+        self.assertEqual(preset.attacker_ram_mb, 2048)
+        # Existing challenges are untouched by preset edits.
+        self.client.post(reverse("manage-lab-template-preset", args=[self.challenge.id]),
+                         {"preset": preset.id})
+        before = LabTemplate.objects.get(challenge=self.challenge).attacker_ram_mb
+        payload["attacker_ram_mb"] = 8192
+        self.client.post(reverse("manage-lab-preset-save"), payload)
+        self.assertEqual(LabTemplate.objects.get(challenge=self.challenge).attacker_ram_mb, before)
+        # Delete.
+        self.client.post(reverse("manage-lab-preset-delete", args=[preset.id]))
+        self.assertFalse(LabPreset.objects.filter(name="Tiny pair").exists())
+
+    def test_preset_with_unknown_version_refused(self):
+        payload = {"name": "Ghost", "attacker_version": "no-such-v1",
+                   "target_version": "", "attacker_ram_mb": 1024, "attacker_vcpu": 1,
+                   "attacker_disk_gb": 20, "target_ram_mb": 512, "target_vcpu": 1,
+                   "target_disk_gb": 10}
+        self.client.post(reverse("manage-lab-preset-save"), payload)
+        self.assertFalse(self._presets().get("Ghost"))
+
+    def test_lab_templates_page_lists_presets_with_usage(self):
+        preset = self._presets()["Kali pair"]
+        self.client.post(reverse("manage-lab-template-preset", args=[self.challenge.id]),
+                         {"preset": preset.id})
+        response = self.client.get(reverse("manage-lab-templates"))
+        content = response.content.decode()
+        self.assertIn("Kali pair", content)
+        self.assertIn("1 challenge", content)
+        self.assertIn("kali-target-v1", content)
+
+    def test_preset_flow_requires_admin(self):
+        self.client.force_login(self.user)
+        preset = self._presets()["Kali pair"]
+        self.assertEqual(self.client.post(
+            reverse("manage-lab-template-preset", args=[self.challenge.id]),
+            {"preset": preset.id}).status_code, 302)  # bounced
+        template = self.challenge.lab_template
+        self.assertNotEqual(template.attacker_version, "kali-base-v1")

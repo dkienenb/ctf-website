@@ -169,9 +169,50 @@ class HostCommand(models.Model):
         return f"{self.operation}:{self.op_id}:{self.status}"
 
 
+class LabPreset(models.Model):
+    """A named, preconfigured lab: pinned attacker/target versions + sizing.
+
+    Challenges pick a preset from a dropdown (or none). Pinning COPIES the
+    preset's values into the challenge's LabTemplate, so a lab always runs
+    what it was pinned with — editing or deleting a preset never rewrites
+    existing challenges, and presets can evolve independently."""
+
+    name = models.CharField(max_length=100, unique=True)
+    attacker_version = models.CharField(max_length=100, blank=True, default="")
+    target_version = models.CharField(max_length=100, blank=True, default="")
+    attacker_ram_mb = models.PositiveIntegerField(default=4096)
+    attacker_vcpu = models.PositiveSmallIntegerField(default=2)
+    attacker_disk_gb = models.PositiveIntegerField(default=20)
+    target_ram_mb = models.PositiveIntegerField(default=2048)
+    target_vcpu = models.PositiveSmallIntegerField(default=1)
+    target_disk_gb = models.PositiveIntegerField(default=10)
+    notes = models.TextField(blank=True, default="")
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = "labs_lab_preset"
+        ordering = ("name",)
+
+    def __str__(self):
+        return self.name
+
+    def matches(self, template):
+        """True when a challenge's pin is exactly this preset's values."""
+        return bool(template) and (
+            template.attacker_version == self.attacker_version
+            and template.target_version == self.target_version
+            and template.attacker_ram_mb == self.attacker_ram_mb
+            and template.attacker_vcpu == self.attacker_vcpu
+            and template.attacker_disk_gb == self.attacker_disk_gb
+            and template.target_ram_mb == self.target_ram_mb
+            and template.target_vcpu == self.target_vcpu
+            and template.target_disk_gb == self.target_disk_gb
+        )
+
+
 class LabTemplate(models.Model):
     """Challenge → pinned attacker/target template versions."""
-
     challenge = models.OneToOneField("content.Challenge", null=True, blank=True, on_delete=models.SET_NULL, related_name="lab_template")
     attacker_version = models.CharField(max_length=100)
     target_version = models.CharField(max_length=100)

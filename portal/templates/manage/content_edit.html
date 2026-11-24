@@ -46,13 +46,45 @@
 </section>
 
 <section class="panel">
-  <h2>Machine template</h2>
-  <p class="muted small">Pin which machine images this challenge's lab uses (see <a href="{% url 'manage-machine-images' %}">machine images</a> · <a href="{% url 'manage-lab-templates' %}">lab templates overview</a>). Leave a version empty to use the workhorse's demo template. Existing labs keep their current template.</p>
-  <form method="post" action="{% url 'manage-lab-template' challenge.id %}">
+  <h2>Preconfigured lab</h2>
+  <p class="muted small">Pick a preconfigured lab for this challenge (manage them on the <a href="{% url 'manage-lab-templates' %}">lab templates page</a>). Pinning copies the preset's versions and sizing — later preset edits never rewrite this challenge. Existing labs keep their current template.</p>
+  {% if lab_template %}
+    <p class="muted small">Current pin:
+      attacker <code>{{ lab_template.attacker_version|default:"demo" }}</code>,
+      target <code>{{ lab_template.target_version|default:"demo" }}</code>
+      {% if matched_preset %}(matches “{{ matched_preset.name }}”){% else %}<strong>(custom — no preset matches)</strong>{% endif %}
+      · {{ lab_template.attacker_ram_mb }}/{{ lab_template.target_ram_mb }} MB,
+      {{ lab_template.attacker_vcpu }}/{{ lab_template.target_vcpu }} vCPU,
+      {{ lab_template.attacker_disk_gb }}/{{ lab_template.target_disk_gb }} GB.
+    </p>
+  {% endif %}
+  <form method="post" action="{% url 'manage-lab-template-preset' challenge.id %}">
     {% csrf_token %}
-    {{ lab_template_form.as_p }}
-    <button class="btn secondary" type="submit">Pin template</button>
+    <label for="id_preset">Preconfigured lab</label>
+    <select name="preset" id="id_preset" required>
+      <option value="" disabled {% if not lab_template %}selected{% endif %}>— choose —</option>
+      {% for preset in lab_presets %}
+        <option value="{{ preset.id }}"
+                {% if lab_template and matched_preset == preset %}selected{% endif %}>
+          {{ preset.name }} — attacker {{ preset.attacker_version|default:"demo" }},
+          target {{ preset.target_version|default:"demo" }}
+        </option>
+      {% endfor %}
+      <option value="none">None — no machine (questions/files/hints only)</option>
+    </select>
+    <button class="btn primary" type="submit">Apply</button>
   </form>
+  {% if lab_template and not matched_preset %}
+    <p class="muted small">The current pin is custom (it matches no preset). Applying a preset below replaces it; the old values are shown above for reference.</p>
+    <details>
+      <summary>Advanced: custom pin (versions + sizing)</summary>
+      <form method="post" action="{% url 'manage-lab-template' challenge.id %}">
+        {% csrf_token %}
+        {{ lab_template_form.as_p }}
+        <button class="btn secondary" type="submit">Pin custom template</button>
+      </form>
+    </details>
+  {% endif %}
   {% if lab_template %}
   <form method="post" action="{% url 'manage-action' %}" class="filters">{% csrf_token %}<input type="hidden" name="action" value="clear-machine"><input type="hidden" name="target" value="{{ challenge.id }}"><button class="btn small danger" type="submit">No machine — remove desktops from this challenge</button></form>
   <p class="muted small">"No machine" makes this a questions/files/hints-only challenge: the lab panel disappears for players, saved labs for it are discarded, and its queue is cleared. Refused while lab slots are still held.</p>

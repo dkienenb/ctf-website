@@ -5,6 +5,55 @@
 <h1>Lab templates</h1>
 <p class="muted small">Which machine images each challenge's lab runs, and the per-role sizing recorded at pin time. To change a challenge's pin, use its edit page — this is the fleet view. Versions are role-scoped: an attacker image can never serve as a target.</p>
 
+<section class="panel">
+  <h2>Preconfigured labs</h2>
+  <p class="muted small">Named bundles of versions + sizing that challenges pick from a dropdown. Pinning copies the values — editing a preset never rewrites already-pinned challenges.</p>
+  <table>
+    <thead>
+      <tr><th>Name</th><th>Attacker</th><th>Target</th><th>Sizing (a/t)</th><th>Pinned by</th><th></th></tr>
+    </thead>
+    <tbody>
+      {% for entry in presets %}
+      <tr>
+        <td><strong>{{ entry.preset.name }}</strong>{% if entry.preset.notes %}<br><span class="muted small">{{ entry.preset.notes }}</span>{% endif %}</td>
+        <td><code>{{ entry.preset.attacker_version|default:"demo" }}</code></td>
+        <td><code>{{ entry.preset.target_version|default:"demo" }}</code></td>
+        <td class="muted small">{{ entry.preset.attacker_ram_mb }}/{{ entry.preset.target_ram_mb }} MB · {{ entry.preset.attacker_vcpu }}/{{ entry.preset.target_vcpu }} vCPU · {{ entry.preset.attacker_disk_gb }}/{{ entry.preset.target_disk_gb }} GB</td>
+        <td>{{ entry.pinned }} challenge{{ entry.pinned|pluralize }}</td>
+        <td>
+          <a class="btn small" href="{% url 'manage-lab-preset-edit' entry.preset.id %}">Edit</a>
+          <form method="post" action="{% url 'manage-lab-preset-delete' entry.preset.id %}" style="display:inline">{% csrf_token %}<button class="btn small danger" type="submit">Delete</button></form>
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+
+  <h3>{% if editing %}Edit “{{ editing.name }}”{% else %}New preconfigured lab{% endif %}</h3>
+  <form method="post" action="{% url 'manage-lab-preset-save' %}">
+    {% csrf_token %}
+    {% if editing %}<input type="hidden" name="preset_id" value="{{ editing.id }}">{% endif %}
+    <div class="field"><label for="id_name">Name</label><input type="text" name="name" id="id_name" maxlength="100" required value="{{ preset_form.name.value|default:'' }}"></div>
+    <div class="field">
+      <label for="id_attacker_version">Attacker version</label>
+      <select name="attacker_version" id="id_attacker_version">{% for choice, label in preset_form.attacker_version.field.choices %}<option value="{{ choice }}" {% if choice == preset_form.attacker_version.value %}selected{% endif %}>{{ label }}</option>{% endfor %}</select>
+    </div>
+    <div class="field">
+      <label for="id_target_version">Target version</label>
+      <select name="target_version" id="id_target_version">{% for choice, label in preset_form.target_version.field.choices %}<option value="{{ choice }}" {% if choice == preset_form.target_version.value %}selected{% endif %}>{{ label }}</option>{% endfor %}</select>
+    </div>
+    <div class="field"><label for="id_attacker_ram_mb">Attacker RAM (MB)</label><input type="number" name="attacker_ram_mb" id="id_attacker_ram_mb" min="128" max="65536" required value="{{ preset_form.attacker_ram_mb.value|default:4096 }}"></div>
+    <div class="field"><label for="id_attacker_vcpu">Attacker vCPU</label><input type="number" name="attacker_vcpu" id="id_attacker_vcpu" min="1" max="64" required value="{{ preset_form.attacker_vcpu.value|default:2 }}"></div>
+    <div class="field"><label for="id_attacker_disk_gb">Attacker disk (GB)</label><input type="number" name="attacker_disk_gb" id="id_attacker_disk_gb" min="1" max="1024" required value="{{ preset_form.attacker_disk_gb.value|default:20 }}"></div>
+    <div class="field"><label for="id_target_ram_mb">Target RAM (MB)</label><input type="number" name="target_ram_mb" id="id_target_ram_mb" min="128" max="65536" required value="{{ preset_form.target_ram_mb.value|default:2048 }}"></div>
+    <div class="field"><label for="id_target_vcpu">Target vCPU</label><input type="number" name="target_vcpu" id="id_target_vcpu" min="1" max="64" required value="{{ preset_form.target_vcpu.value|default:1 }}"></div>
+    <div class="field"><label for="id_target_disk_gb">Target disk (GB)</label><input type="number" name="target_disk_gb" id="id_target_disk_gb" min="1" max="1024" required value="{{ preset_form.target_disk_gb.value|default:10 }}"></div>
+    <div class="field"><label for="id_notes">Notes</label><textarea name="notes" id="id_notes" rows="2">{{ preset_form.notes.value|default:'' }}</textarea></div>
+    <button class="btn primary" type="submit">{% if editing %}Save preset{% else %}Create preconfigured lab{% endif %}</button>
+    {% if editing %}<a class="btn small" href="{% url 'manage-lab-templates' %}">Cancel</a>{% endif %}
+  </form>
+</section>
+
 {% if rows %}
 <section class="panel">
   <table>

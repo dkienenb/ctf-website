@@ -677,6 +677,80 @@ def lab_template_save(actor, challenge_id, *, attacker_version, target_version,
     return template
 
 
+def pin_lab_preset(actor, challenge_id, preset_id):
+    """Pin a preconfigured lab onto a challenge: the preset's versions and
+    sizing are COPIED into the challenge's LabTemplate (§10) — the lab
+    always runs what it was pinned with, so editing or deleting a preset
+    later never rewrites existing challenges."""
+    from .models import LabPreset
+
+    try:
+        preset = LabPreset.objects.get(pk=preset_id)
+    except LabPreset.DoesNotExist:
+        raise ServiceError("That preconfigured lab no longer exists.", 404)
+    return lab_template_save(
+        actor, challenge_id,
+        attacker_version=preset.attacker_version,
+        target_version=preset.target_version,
+        attacker_ram_mb=preset.attacker_ram_mb,
+        attacker_vcpu=preset.attacker_vcpu,
+        attacker_disk_gb=preset.attacker_disk_gb,
+        target_ram_mb=preset.target_ram_mb,
+        target_vcpu=preset.target_vcpu,
+        target_disk_gb=preset.target_disk_gb,
+    )
+
+
+def save_lab_preset(actor, *, preset_id=None, **fields):
+    """Create or update a preconfigured lab (name, versions, sizing)."""
+    from .models import LabPreset
+    from portal.apps.submissions.models import DataRevision
+
+    if actor is None or not getattr(actor, "is_admin", False):
+        raise ServiceError("Administrator access is required.", 403)
+    name = (fields.get("name") or "").strip()
+    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9 _-]{0,99}", name):
+        raise ServiceError("Preset name must start with a letter or digit and use letters, digits, spaces, dashes, underscores.", 400)
+    for role, version in (("attacker", fields.get("attacker_version", "")),
+                          ("target", fields.get("target_version", ""))):
+        if version and not MachineImage.objects.filter(role=role, version=version).exists():
+            raise ServiceError(f"No {role} machine image named '{version}'. Upload it first.", 400)
+    preset = None
+    if preset_id:
+        preset = LabPreset.objects.filter(pk=preset_id).first()
+        if preset is None:
+            raise ServiceError("Preset not found.", 404)
+    else:
+        if LabPreset.objects.filter(name=name).exists():
+            raise ServiceError("A preconfigured lab with that name already exists.", 409)
+    if preset is None:
+        preset = LabPreset(name=name)
+    else:
+        preset.name = name
+    for field in ("attacker_version", "target_version", "attacker_ram_mb",
+                  "attacker_vcpu", "attacker_disk_gb", "target_ram_mb",
+                  "target_vcpu", "target_disk_gb", "notes"):
+        setattr(preset, field, fields.get(field, getattr(preset, field, "")))
+    preset.save()
+    DataRevision.bump()
+    return preset
+
+
+def delete_lab_preset(actor, preset_id):
+    """Delete a preconfigured lab. Existing challenges keep the values
+    they were pinned with (pinning copies, it never references)."""
+    from .models import LabPreset
+    from portal.apps.submissions.models import DataRevision
+
+    if actor is None or not getattr(actor, "is_admin", False):
+        raise ServiceError("Administrator access is required.", 403)
+    preset = LabPreset.objects.filter(pk=preset_id).first()
+    if preset is None:
+        raise ServiceError("Preset not found.", 404)
+    preset.delete()
+    DataRevision.bump()
+
+
 def lab_template_clear(actor, challenge_id):
     """Mark a challenge as having NO machine: the lab template is removed
     and the challenge page stops offering desktops entirely (questions,

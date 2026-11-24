@@ -12,7 +12,7 @@ from django.contrib import messages
 
 from portal.apps.accounts.decorators import admin_page
 from portal.apps.labs.guacamole import issue_build_grant_flow, GrantError as BuildGrantError
-from .models import Host, LabTemplate, MachineBuild, MachineImage
+from .models import Host, LabPreset, LabTemplate, MachineBuild, MachineImage
 from . import services as lab_services
 
 
@@ -141,12 +141,13 @@ def build_console(request, build_id):
 
 
 @admin_page
-def lab_templates(request):
+def lab_templates(request, preset_id=None):
     """Overview of every challenge's pinned machine template: versions,
     sizing, and whether each referenced version actually exists with a
     distributable disk. Pinning itself stays on the challenge edit page —
-    this is the read-only fleet view."""
-    from portal.apps.submissions.manage_views import LabTemplateForm
+    this is the fleet view, plus preconfigured-lab (preset) management.
+    With preset_id, the create/edit form is preloaded with that preset."""
+    from portal.apps.submissions.manage_views import LabPresetForm
 
     templates = (LabTemplate.objects.select_related("challenge")
                  .order_by("challenge__title"))
@@ -171,10 +172,97 @@ def lab_templates(request):
         "attacker": status(MachineImage.Role.ATTACKER, template.attacker_version),
         "target": status(MachineImage.Role.TARGET, template.target_version),
     } for template in templates]
+    from .models import LabPreset
+    presets = []
+    editing = LabPreset.objects.filter(pk=preset_id).first() if preset_id else None
+    for preset in LabPreset.objects.all():
+        pinned = sum(1 for template in templates if preset.matches(template))
+        presets.append({"preset": preset, "pinned": pinned})
     return render(request, "manage/lab_templates.html", {
         "rows": rows,
-        "form": LabTemplateForm(),  # version choices, for reference columns
+        "presets": presets,
+        "editing": editing,
+        "preset_form": LabPresetForm(preset=editing),
     })
+
+
+@admin_page
+def lab_preset_edit(request, preset_id):
+    """Render the lab templates page with a preset loaded into the edit form."""
+    from .models import LabPreset
+
+    get_object_or_404(LabPreset, pk=preset_id)
+    return lab_templates_page(request, preset_id=preset_id)
+
+
+def lab_templates_page(request, preset_id=None):
+    """The lab templates view, optionally with a preset loaded for editing."""
+    from portal.apps.submissions.manage_views import LabPresetForm
+
+    preset = LabPreset.objects.filter(pk=preset_id).first() if preset_id else None
+    base = lab_templates(request)
+    return base
+
+
+@admin_page
+def lab_preset_save(request):
+    """Create or update a preconfigured lab from the lab templates page."""
+    from . import services as lab_services
+    from .models import LabPreset
+
+    if request.method != "POST":
+        return redirect("manage-lab-templates")
+    preset_id = request.POST.get("preset_id") or None
+    from portal.apps.submissions.manage_views import LabPresetForm
+    form = LabPresetForm(request.POST)
+    if not form.is_valid():
+        messages.error(request, "Check the preconfigured-lab fields.")
+        return redirect("manage-lab-templates")
+    fields = form.cleaned_data
+    try:
+        preset = lab_services.save_lab_preset(
+            request.user, preset_id=preset_id,
+            name=fields["name"],
+            attacker_version=fields["attacker_version"],
+            target_version=fields["target_version"],
+            attacker_ram_mb=fields["attacker_ram_mb"],
+            attacker_vcpu=fields["attacker_vcpu"],
+            attacker_disk_gb=fields["attacker_disk_gb"],
+            target_ram_mb=fields["target_ram_mb"],
+            target_vcpu=fields["target_vcpu"],
+            target_disk_gb=fields["target_disk_gb"],
+            notes=fields["notes"],
+        )
+    except lab_services.ServiceError as error:
+        messages.error(request, error.message)
+        return redirect("manage-lab-templates")
+    if preset_id:
+        messages.success(request, f"Preconfigured lab '{preset.name}' updated. Existing challenges keep their pinned values.")
+    else:
+        messages.success(request, f"Preconfigured lab '{preset.name}' created.")
+    return redirect("manage-lab-templates")
+
+
+@admin_page
+def lab_preset_edit(request, preset_id):
+    """GET: render the lab templates page with this preset loaded into the
+    edit form (POST goes through lab_preset_save)."""
+    return lab_templates(request, preset_id=preset_id)
+
+
+@admin_page
+def lab_preset_delete(request, preset_id):
+    """Delete a preconfigured lab; existing challenges keep their pinned values."""
+    from . import services as lab_services
+
+    if request.method != "POST":
+        return redirect("manage-lab-templates")
+    try:
+        lab_services.delete_lab_preset(request.user, preset_id)
+        messages.success(request, "Preconfigured lab deleted. Existing challenges keep their pinned values.")
+    except lab_services.ServiceError as error:
+        messages.error(request, error.message)
+    return redirect("manage-lab-templates")
 
 
 @admin_page

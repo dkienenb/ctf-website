@@ -397,13 +397,43 @@ def content_edit(request, challenge_id):
     upload_form = AttachmentUploadForm()
     hint_form = HintCreateForm()
     lab_template = getattr(challenge, "lab_template", None)  # reverse OneToOne accessor
+    from portal.apps.labs.models import LabPreset
+    presets = list(LabPreset.objects.all())
+    matched = next((p for p in presets if p.matches(lab_template)), None)
     return render(request, "manage/content_edit.html", {
         "challenge": challenge, "form": form, "upload_form": upload_form,
         "hint_form": hint_form,
         "lab_template_form": LabTemplateForm(initial=_lab_template_initial(lab_template)),
         "lab_template": lab_template,
+        "lab_presets": presets,
+        "matched_preset": matched,
         "question_forms": _inline_question_forms(challenge),
     })
+
+
+@admin_page
+def lab_template_preset(request, challenge_id):
+    """Pin a preconfigured lab (dropdown selection) — or remove the lab
+    entirely ("none"), which routes through the clear-machine flow."""
+    from portal.apps.labs import services as lab_services
+
+    challenge = get_object_or_404(Challenge, pk=challenge_id)
+    if request.method != "POST":
+        return redirect("manage-content-edit", challenge_id=challenge_id)
+    choice = request.POST.get("preset", "")
+    if choice == "none":
+        try:
+            lab_services.lab_template_clear(request.user, challenge.id)
+            messages.success(request, "No machine: this challenge is now questions/files/hints only.")
+        except lab_services.ServiceError as error:
+            messages.error(request, error.message)
+    elif choice:
+        try:
+            lab_services.pin_lab_preset(request.user, challenge.id, int(choice))
+            messages.success(request, "Preconfigured lab pinned for this challenge.")
+        except (lab_services.ServiceError, ValueError) as error:
+            messages.error(request, getattr(error, "message", "Unknown preconfigured lab."))
+    return redirect("manage-content-edit", challenge_id=challenge.id)
 
 
 class PoolForm(forms.Form):
@@ -490,6 +520,37 @@ class LabTemplateForm(forms.Form):
         demo = [("", "Demo template (agent/SETUP.md)")]
         self.fields["attacker_version"].choices = demo + [(image.version, image.version) for image in attacker]
         self.fields["target_version"].choices = demo + [(image.version, image.version) for image in target]
+
+
+class LabPresetForm(forms.Form):
+    """Create/update a preconfigured lab: a named bundle of pinned versions
+    + sizing that challenges pick from a dropdown (or none)."""
+
+    name = forms.CharField(max_length=100)
+    attacker_version = forms.ChoiceField(required=False)
+    target_version = forms.ChoiceField(required=False)
+    attacker_ram_mb = forms.IntegerField(min_value=128, max_value=65536, initial=4096)
+    attacker_vcpu = forms.IntegerField(min_value=1, max_value=64, initial=2)
+    attacker_disk_gb = forms.IntegerField(min_value=1, max_value=1024, initial=20)
+    target_ram_mb = forms.IntegerField(min_value=128, max_value=65536, initial=2048)
+    target_vcpu = forms.IntegerField(min_value=1, max_value=64, initial=1)
+    target_disk_gb = forms.IntegerField(min_value=1, max_value=1024, initial=10)
+    notes = forms.CharField(widget=forms.Textarea(attrs={"rows": 2}), required=False)
+
+    def __init__(self, *args, preset=None, **kwargs):
+        super().__init__(*args, **kwargs)
+        from portal.apps.labs.models import MachineImage
+
+        attacker = MachineImage.objects.filter(role=MachineImage.Role.ATTACKER).order_by("version")
+        target = MachineImage.objects.filter(role=MachineImage.Role.TARGET).order_by("version")
+        demo = [("", "Demo template (agent/SETUP.md)")]
+        self.fields["attacker_version"].choices = demo + [(image.version, image.version) for image in attacker]
+        self.fields["target_version"].choices = demo + [(image.version, image.version) for image in target]
+        if preset is not None:
+            for field in ("name", "attacker_version", "target_version", "attacker_ram_mb",
+                          "attacker_vcpu", "attacker_disk_gb", "target_ram_mb",
+                          "target_vcpu", "target_disk_gb", "notes"):
+                self.fields[field].initial = getattr(preset, field)
 
 
 def _lab_template_initial(template):
