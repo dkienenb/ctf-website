@@ -19,11 +19,12 @@ def seed_presets(apps, schema_editor):
     LabPreset.objects.update_or_create(
         name="Demo pair",
         defaults={
-            "attacker_version": "",
-            "target_version": "",
+            "attacker_version": "alpine-demo-v1",
+            "target_version": "demo-target-v1",
             "attacker_ram_mb": 4096, "attacker_vcpu": 2, "attacker_disk_gb": 20,
             "target_ram_mb": 2048, "target_vcpu": 1, "target_disk_gb": 10,
-            "notes": "The workhorse's built-in Alpine demo pair.",
+            "notes": "The Alpine demo pair, pinned explicitly "
+                     "(alpine-demo-v1 / demo-target-v1).",
         },
     )
 

@@ -202,7 +202,8 @@ class LabPresetFlowTests(TestCase):
         self.assertIn("Demo pair", presets)
         self.assertEqual(presets["Kali pair"].attacker_version, "kali-base-v1")
         self.assertEqual(presets["Kali pair"].target_version, "kali-target-v1")
-        self.assertEqual(presets["Demo pair"].attacker_version, "")
+        self.assertEqual(presets["Demo pair"].attacker_version, "alpine-demo-v1")
+        self.assertEqual(presets["Demo pair"].target_version, "demo-target-v1")
 
     def test_dropdown_pins_the_preset_values(self):
         preset = self._presets()["Kali pair"]
