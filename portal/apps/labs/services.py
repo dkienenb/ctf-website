@@ -913,59 +913,92 @@ def _apply_build_result(command, ok):
     build.save()
 
 
-def receive_build_artifact(build, *, file_name, seq, total, blob, sha, size):
+def receive_build_artifact(build, *, file_name, seq, total, blob, sha, size, chunk_bytes=None):
     """Assemble an agent-pushed capture artifact (chunked, verified) and
-    attach it to the build's MachineImage record — closing the manual
-    transfer gap: capture → upload → Distribute works without SSH."""
-    import base64 as base64_mod
+    attach it to the build's MachineImage record.
+
+    Chunks land DIRECTLY at their file offset (chunk N of a multi-chunk
+    artifact is written at (N-1)·chunk_bytes) — no per-chunk part files and
+    no assembled copy, so a multi-gigabyte capture needs exactly its own
+    size in free space, arrival order is irrelevant, and a re-sent chunk is
+    an idempotent overwrite. Completeness is tracked with zero-byte marker
+    files; once every chunk is staged the file is streamed-verified against
+    the sha256 and attached (renamed into place — same filesystem, so the
+    attach never duplicates the data)."""
     import os as os_mod
+
+    try:
+        seq, total = int(seq), int(total)
+    except (TypeError, ValueError):
+        raise ServiceError("Bad chunk indexes.", 400)
+    if not 1 <= seq <= total:
+        raise ServiceError("Chunk seq outside 1..total.", 400)
+    if total > 1:
+        try:
+            chunk_bytes = int(chunk_bytes)
+        except (TypeError, ValueError):
+            raise ServiceError("Multi-chunk artifacts require chunk_bytes.", 400)
+        if chunk_bytes <= 0:
+            raise ServiceError("chunk_bytes must be positive.", 400)
 
     staging_root = Path(settings.PRIVATE_TEMPLATES_DIR) / ".build-upload" / f"build-{build.id}"
     staging_root.mkdir(parents=True, exist_ok=True)
-    chunk_name = f"{file_name}.part{seq:06d}"
-    (staging_root / chunk_name).write_bytes(blob)
-    parts = sorted(staging_root.glob(f"{file_name}.part*"))
-    if len(parts) < total:
-        return {"staged": f"{seq}/{total}", "complete": False}
-    if len(parts) > total:
+    target = staging_root / file_name
+    marker = staging_root / f"{file_name}.received{seq:06d}"
+    if total == 1:
+        target.write_bytes(blob)
+    else:
+        with target.open("r+b" if target.exists() else "wb") as out:
+            out.seek((seq - 1) * chunk_bytes)
+            out.write(blob)
+    marker.write_bytes(b"")  # zero-byte completion marker for this chunk
+
+    markers = len(list(staging_root.glob(f"{file_name}.received*")))
+    if markers < total:
+        return {"staged": f"{markers}/{total}", "complete": False}
+    if markers > total:
         shutil.rmtree(staging_root, ignore_errors=True)
         raise ServiceError("Staging holds more chunks than the transfer declared.", 409)
 
-    assembled = staging_root / file_name
     hasher = hashlib.sha256()
-    with assembled.open("wb") as out:
-        for part in parts:
-            with part.open("rb") as src:
-                shutil.copyfileobj(src, out, length=1024 * 1024)
-            with part.open("rb") as src:
-                for block in iter(lambda: src.read(1024 * 1024), b""):
-                    hasher.update(block)
+    with target.open("rb") as src:
+        for block in iter(lambda: src.read(1024 * 1024), b""):
+            hasher.update(block)
     if hasher.hexdigest() != sha:
         shutil.rmtree(staging_root, ignore_errors=True)
         raise ServiceError("Uploaded artifact failed sha256 verification.", 409)
-    for part in parts:
-        part.unlink()
 
+    image, _ = MachineImage.objects.get_or_create(
+        role=build.role, version=build.version,
+        defaults={"notes": f"Captured on {build.host.name} from base {build.base_version or 'demo'}."},
+    )
     if file_name == "domain.xml":
-        image, _ = MachineImage.objects.get_or_create(
-            role=build.role, version=build.version,
-            defaults={"notes": f"Captured on {build.host.name} from base {build.base_version or 'demo'}."},
-        )
-        image.domain_xml = assembled.read_text()
+        image.domain_xml = target.read_text()
         image.save(update_fields=("domain_xml", "updated_at"))
-        assembled.unlink()
     else:
-        image, _ = MachineImage.objects.get_or_create(
-            role=build.role, version=build.version,
-            defaults={"notes": f"Captured on {build.host.name} from base {build.base_version or 'demo'}."},
-        )
-        if image.disk_file:
-            image.disk_file.delete(save=False)
-        image.disk_file.save(f"{build.role}-{build.version}-disk-template", assembled.open("rb"), save=False)
-        image.disk_sha256 = sha
-        image.disk_size = size or assembled.stat().st_size
-        image.save(update_fields=("disk_file", "disk_sha256", "disk_size", "updated_at"))
-        assembled.unlink()
+        final_name = f"images/{build.role}-{build.version}-disk-template"
+        storage = image.disk_file.storage
+        try:
+            # Same filesystem: rename into place instead of copying through
+            # Django's storage.save (which would hold two copies of a
+            # multi-gigabyte disk at peak).
+            final_path = storage.path(final_name)
+            Path(final_path).parent.mkdir(parents=True, exist_ok=True)
+            os_mod.replace(target, final_path)
+            if image.disk_file and image.disk_file.name and image.disk_file.name != final_name:
+                image.disk_file.delete(save=False)
+            image.disk_file.name = final_name
+            image.disk_sha256 = sha
+            image.disk_size = size or storage.size(final_name)
+            image.save(update_fields=("disk_file", "disk_sha256", "disk_size", "updated_at"))
+        except (NotImplementedError, AttributeError):
+            # Non-filesystem storage: fall back to the streaming copy.
+            if image.disk_file:
+                image.disk_file.delete(save=False)
+            image.disk_file.save(final_name.split("images/")[-1], target.open("rb"), save=False)
+            image.disk_sha256 = sha
+            image.disk_size = size or image.disk_file.size
+            image.save(update_fields=("disk_file", "disk_sha256", "disk_size", "updated_at"))
     # Remove notes claiming host-local once the controller holds the files.
     if image.notes and "host-local" in image.notes:
         image.notes = f"Captured on {build.host.name} from base {build.base_version or 'demo'}; transferred to the controller."

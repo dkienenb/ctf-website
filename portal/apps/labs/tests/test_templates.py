@@ -570,27 +570,41 @@ class BuildEdgeCaseTests(TestCase):
         self.assertIn("qcow2", error.exception.message)
 
     def test_build_artifact_out_of_order_chunks(self):
+        """Chunks land at their file offsets in any order; re-sending a
+        chunk is an idempotent overwrite; assembly needs exactly the
+        artifact's size on disk (no per-chunk parts, no assembled copy)."""
         from portal.apps.labs.models import MachineBuild
         host = make_host("order-host")
         build = MachineBuild.objects.create(host=host, role="target",
                                             version="kali-ooo", base_version="")
-        import base64 as b64
         content = b"QFI\xfb\x00\x03half-one-half-two"
         half = len(content) // 2
+        chunk_bytes = half
         sha = hashlib.sha256(content).hexdigest()
         # Chunk 2 lands FIRST, chunk 1 completes the transfer.
         r2 = services.receive_build_artifact(build, file_name="disk-template",
-                                             seq=2, total=2,
+                                             seq=2, total=2, chunk_bytes=chunk_bytes,
                                              blob=content[half:], sha=sha, size=len(content))
         self.assertFalse(r2["complete"])
+        # Re-sending the same chunk is idempotent (still not complete).
+        r2_again = services.receive_build_artifact(build, file_name="disk-template",
+                                                   seq=2, total=2, chunk_bytes=chunk_bytes,
+                                                   blob=content[half:], sha=sha, size=len(content))
+        self.assertFalse(r2_again["complete"])
         r1 = services.receive_build_artifact(build, file_name="disk-template",
-                                             seq=1, total=2,
+                                             seq=1, total=2, chunk_bytes=chunk_bytes,
                                              blob=content[:half], sha=sha, size=len(content))
         self.assertTrue(r1["complete"])
         image = MachineImage.objects.get(role="target", version="kali-ooo")
+        self.assertEqual(image.disk_file.name, f"images/target-kali-ooo-disk-template")
         image.disk_file.open("rb")
         self.assertEqual(image.disk_file.read(), content)
         image.disk_file.close()
+        # The staging area is gone once the artifact is attached.
+        import pathlib
+        from django.conf import settings
+        self.assertFalse(
+            (pathlib.Path(settings.PRIVATE_TEMPLATES_DIR) / ".build-upload" / f"build-{build.id}").exists())
 
 
 class BuildUploadRetryTests(TestCase):

@@ -81,6 +81,7 @@ def build_artifact(request):
         result = services.receive_build_artifact(
             build, file_name=file_name, seq=seq, total=total, blob=blob, sha=sha,
             size=int(payload.get("size", 0)),
+            chunk_bytes=payload.get("chunk_bytes"),
         )
     except services.ServiceError as error:
         return _reject(error.message, error.status)

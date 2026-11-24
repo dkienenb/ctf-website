@@ -879,7 +879,7 @@ class ControllerClient:
         self.token = config["token"]
         self.host_name = config["host_name"]
 
-    def request(self, path, payload=None, method=None):
+    def request(self, path, payload=None, method=None, timeout=15):
         data = json.dumps(payload).encode() if payload is not None else None
         request = urllib.request.Request(
             self.base + path,
@@ -887,7 +887,7 @@ class ControllerClient:
             method=method or ("POST" if data is not None else "GET"),
             headers={"Authorization": f"Bearer {self.token}", "Content-Type": "application/json"},
         )
-        with urllib.request.urlopen(request, timeout=15) as response:
+        with urllib.request.urlopen(request, timeout=timeout) as response:
             return json.loads(response.read())
 
     def heartbeat(self, resources):
@@ -929,8 +929,11 @@ class ControllerClient:
                         "build_id": build_id, "role": role, "version": version,
                         "file": file_name, "seq": seq, "total": total,
                         "sha256": file_sha, "size": size,
+                        "chunk_bytes": chunk_bytes,
                         "data_b64": base64.b64encode(block).decode("ascii"),
-                    })
+                    }, timeout=600)
+                    # The FINAL chunk returns only after the controller has
+                    # streamed-verified the whole file — give it minutes.
 
     def download_artifact(self, role, version, file_name, sha256, destination):
         """Stream one staged template file from the controller to destination.
@@ -1011,6 +1014,11 @@ def run_once(client, executor, config, deadlines, build_inline=False):
         deadline = command.get("acknowledged_deadline")
         if deadline:
             deadlines[command["payload"].get("lab", command["op_id"])] = deadline
+        op_id = command.get("op_id", "")
+        if op_id in IN_FLIGHT:
+            continue  # long build ops stay PENDING until their result lands;
+            # the controller re-polls them every cycle — execute them once.
+        IN_FLIGHT.add(op_id)
         if command.get("operation", "").startswith("build-") and not build_inline:
             BUILD_QUEUE.put((client, executor, command))
             continue
@@ -1021,6 +1029,8 @@ def run_once(client, executor, config, deadlines, build_inline=False):
         except Exception as error:  # report failures; never retry destructively
             print(f"agent: command {command['op_id'][:8]} failed: {error}", file=sys.stderr)
             client.result(command["op_id"], "failed", {"error": str(error)[:500]})
+        finally:
+            IN_FLIGHT.discard(command.get("op_id", ""))
         handled += 1
     enforce_deadlines(client, executor, deadlines)
     return handled
@@ -1054,6 +1064,9 @@ def _post_build_side_effects(client, executor, command, detail):
 
 
 BUILD_QUEUE = queue.Queue()
+IN_FLIGHT = set()  # op_ids currently being executed; pending build ops are
+# re-polled every cycle until their result lands, so run_once must not
+# enqueue the same long command again while it runs.
 
 
 def build_worker(client, executor):
@@ -1073,6 +1086,8 @@ def build_worker(client, executor):
         except Exception as error:
             print(f"agent: command {cmd['op_id'][:8]} failed: {error}", file=sys.stderr)
             c.result(cmd["op_id"], "failed", {"error": str(error)[:500]})
+        finally:
+            IN_FLIGHT.discard(cmd.get("op_id", ""))
         BUILD_QUEUE.task_done()
 
 
