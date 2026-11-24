@@ -662,3 +662,126 @@ class BuildUploadRetryTests(TestCase):
         with self.assertRaises(ServiceError) as error:
             services.retry_build_upload(self.admin, build.id)
         self.assertIn("offline", error.exception.message)
+
+
+class ReceiveArtifactEdgeCaseTests(TestCase):
+    """Offset-based assembly: uneven tails, idempotent re-sends, staging
+    hygiene on failure, and record replacement."""
+
+    def setUp(self):
+        self.host = make_host("recv-host")
+        from portal.apps.labs.models import MachineBuild
+        self.build = MachineBuild.objects.create(host=self.host, role="attacker",
+                                                 version="kali-recv", base_version="")
+
+    def _receive(self, content, chunk_bytes, sha=None, seqs=None, size=None, **overrides):
+        payload = {"file_name": "disk-template", "total": -(-len(content) // chunk_bytes),
+                   "chunk_bytes": chunk_bytes, "sha": sha or hashlib.sha256(content).hexdigest(),
+                   "size": len(content) if size is None else size}
+        payload.update(overrides)
+        results = []
+        for seq in (seqs or range(1, payload["total"] + 1)):
+            start = (seq - 1) * chunk_bytes
+            blob = content[start:start + chunk_bytes]
+            results.append(services.receive_build_artifact(self.build, seq=seq, blob=blob, **payload))
+        return results
+
+    def test_last_chunk_may_be_shorter_than_chunk_bytes(self):
+        content = b"QFI\xfb\x00\x03abcdefghij"  # 15 bytes → chunks 6, 6, 3
+        results = self._receive(content, chunk_bytes=6)
+        self.assertFalse(results[0]["complete"])
+        self.assertTrue(results[-1]["complete"])
+        image = MachineImage.objects.get(role="attacker", version="kali-recv")
+        image.disk_file.open("rb")
+        self.assertEqual(image.disk_file.read(), content)
+        image.disk_file.close()
+
+    def test_sha_mismatch_wipes_staging_and_allows_a_clean_retry(self):
+        content = b"QFI\xfb\x00\x03real-content"
+        wrong_sha = hashlib.sha256(b"different").hexdigest()
+        with self.assertRaises(ServiceError) as error:
+            self._receive(content, chunk_bytes=6, sha=wrong_sha)
+        self.assertIn("sha256", error.exception.message)
+        import pathlib
+        from django.conf import settings
+        staging = pathlib.Path(settings.PRIVATE_TEMPLATES_DIR) / ".build-upload" / f"build-{self.build.id}"
+        self.assertFalse(staging.exists())  # wiped, not left half-full
+        # A correct retry works from scratch.
+        results = self._receive(content, chunk_bytes=6)
+        self.assertTrue(results[-1]["complete"])
+        image = MachineImage.objects.get(role="attacker", version="kali-recv")
+        image.disk_file.open("rb")
+        self.assertEqual(image.disk_file.read(), content)
+        image.disk_file.close()
+
+    def test_more_markers_than_declared_is_refused_and_wiped(self):
+        import pathlib
+        from django.conf import settings
+        staging = pathlib.Path(settings.PRIVATE_TEMPLATES_DIR) / ".build-upload" / f"build-{self.build.id}"
+        content = b"QFI\xfb\x00\x03three-chunk"  # 16 bytes → chunks 8, 8, ... total = 2
+        chunk_bytes = 8
+        total = -(-len(content) // chunk_bytes)
+        # Forge a fully-staged transfer PLUS a stale marker from an earlier,
+        # differently-shaped attempt (seq 9 > total).
+        staging.mkdir(parents=True, exist_ok=True)
+        (staging / "disk-template").write_bytes(content)
+        for seq in range(1, total + 2):
+            (staging / f"disk-template.received{seq:06d}").write_bytes(b"")
+        with self.assertRaises(ServiceError) as error:
+            services.receive_build_artifact(self.build, file_name="disk-template",
+                                            seq=1, total=total, chunk_bytes=chunk_bytes,
+                                            blob=content[:chunk_bytes],
+                                            sha=hashlib.sha256(content).hexdigest(),
+                                            size=len(content))
+        self.assertIn("more chunks than the transfer declared", error.exception.message)
+        self.assertFalse(staging.exists())
+
+    def test_multi_chunk_requires_chunk_bytes(self):
+        content = b"QFI\xfb\x00\x03two-chunk"
+        with self.assertRaises(ServiceError) as error:
+            services.receive_build_artifact(self.build, file_name="disk-template",
+                                            seq=1, total=2, blob=content[:8],
+                                            sha=hashlib.sha256(content).hexdigest(),
+                                            size=len(content))
+        self.assertIn("chunk_bytes", error.exception.message)
+
+    def test_domain_xml_single_chunk_attaches_without_chunk_bytes(self):
+        results = self._receive(b"<domain>@NAME@</domain>", chunk_bytes=4096,
+                                file_name="domain.xml")
+        self.assertTrue(results[-1]["complete"])
+        image = MachineImage.objects.get(role="attacker", version="kali-recv")
+        self.assertEqual(image.domain_xml, "<domain>@NAME@</domain>")
+        self.assertFalse(image.disk_file)  # xml alone never implies a disk
+
+    def test_receive_replaces_a_stale_disk_record_in_place(self):
+        """Re-uploading over an existing record deletes the OLD file and
+        renames the new one into the canonical name (no copy, no orphan)."""
+        import pathlib
+        from django.conf import settings
+        from portal.apps.labs.models import MachineImage
+        image = MachineImage.objects.create(role="attacker", version="kali-recv",
+                                            domain_xml="<domain/>")
+        storage = image.disk_file.storage
+        old_name = "images/attacker-kali-recv-old-name"
+        old_path = pathlib.Path(storage.path(old_name))
+        old_path.parent.mkdir(parents=True, exist_ok=True)
+        old_path.write_bytes(b"stale-disk")
+        image.disk_file.name = old_name
+        image.save(update_fields=("disk_file",))
+
+        content = b"QFI\xfb\x00\x03fresh-disk!"
+        results = self._receive(content, chunk_bytes=4096)
+        self.assertTrue(results[-1]["complete"])
+        image.refresh_from_db()
+        self.assertEqual(image.disk_file.name, "images/attacker-kali-recv-disk-template")
+        self.assertFalse(old_path.exists())  # the stale file was deleted
+        image.disk_file.open("rb")
+        self.assertEqual(image.disk_file.read(), content)
+        image.disk_file.close()
+
+    def test_size_zero_falls_back_to_the_stored_file_size(self):
+        content = b"QFI\xfb\x00\x03sized-by-content"
+        results = self._receive(content, chunk_bytes=4096, size=0)
+        self.assertTrue(results[-1]["complete"])
+        image = MachineImage.objects.get(role="attacker", version="kali-recv")
+        self.assertEqual(image.disk_size, len(content))

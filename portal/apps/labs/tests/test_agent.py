@@ -325,6 +325,50 @@ class AgentExecutorTests(TestCase):
                     "op_id": "u2", "operation": "build-upload",
                     "payload": {"role": "attacker", "version": "kali-empty", "build_id": 6}})
             self.assertIn("nothing to upload", str(error.exception))
+
+    def test_upload_chunks_carry_chunk_bytes_and_long_timeout(self):
+        """Every artifact POST carries chunk_bytes (the controller writes
+        each chunk at (seq-1)·chunk_bytes) and uses a long request timeout:
+        the FINAL chunk's response includes streaming verification of the
+        whole multi-gigabyte file."""
+        import tempfile
+        from unittest import mock
+
+        client = workhorse_agent.ControllerClient.__new__(workhorse_agent.ControllerClient)
+        client.base = "http://controller"
+        client.token = "t"
+        client.host_name = "wh"
+        posts = []
+
+        def record(path, payload=None, method=None, timeout=15):
+            posts.append((path, payload, timeout))
+            return {"status": "ok", "complete": payload["seq"] == payload["total"]}
+
+        with tempfile.TemporaryDirectory() as tmp:
+            domain = workhorse_agent.Path(tmp) / "domain.xml"
+            disk = workhorse_agent.Path(tmp) / "disk-template"
+            domain.write_text("<x/>")  # single chunk
+            disk.write_bytes(b"chunk-one-chunk-two-tail")  # 24 bytes → 3 chunks of 10
+            with mock.patch.object(client, "request", side_effect=record):
+                client.upload_build_artifacts(
+                    5, "attacker", "kali-v1",
+                    files=(("domain.xml", domain), ("disk-template", disk)),
+                    chunk_bytes=10)
+        self.assertEqual(len(posts), 4)  # 1 xml chunk + 3 disk chunks
+        xml_post, disk_posts = posts[0], posts[1:]
+        self.assertEqual(xml_post[0], "/agentapi/build-artifact")
+        self.assertEqual(xml_post[1]["file"], "domain.xml")
+        self.assertEqual(xml_post[1]["seq"], 1)
+        self.assertEqual(xml_post[1]["total"], 1)
+        self.assertEqual(xml_post[2], 600)  # long timeout even for single-chunk
+        self.assertEqual([p[1]["seq"] for p in disk_posts], [1, 2, 3])
+        self.assertTrue(all(p[1]["total"] == 3 for p in disk_posts))
+        self.assertTrue(all(p[1]["chunk_bytes"] == 10 for p in disk_posts))
+        self.assertTrue(all(p[2] == 600 for p in disk_posts))
+        import base64
+        reassembled = b"".join(
+            base64.b64decode(p[1]["data_b64"]) for p in disk_posts)
+        self.assertEqual(reassembled, b"chunk-one-chunk-two-tail")
     def test_vocabulary_remains_restricted_and_closed(self):
         with self.assertRaises(workhorse_agent.AgentError):
             workhorse_agent.execute(None, {"operation": "shell", "payload": {"cmd": "rm -rf /"}})

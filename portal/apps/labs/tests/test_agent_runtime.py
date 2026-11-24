@@ -106,6 +106,38 @@ class AgentRuntimeTests(TestCase):
         saves = [call for call in self.executor.calls if call[0] == "save"]
         self.assertEqual(len(saves), 2)  # attacker + target
 
+    def test_run_once_releases_the_inflight_guard_after_inline_ops(self):
+        client, calls = _recording_client(
+            poll_response={"commands": [self._command("template-list")]})
+        workhorse_agent.run_once(client, self.executor, self.config, deadlines={})
+        self.assertEqual(calls["result"][0]["status"], "ok")
+        # Completed inline ops release the guard: a later poll may re-run them.
+        self.assertNotIn("op-1234567890", workhorse_agent.IN_FLIGHT)
+
+    def test_run_once_never_requeues_a_running_build_op(self):
+        """The controller re-delivers pending commands every poll until
+        their result lands; a long build op must be enqueued EXACTLY ONCE,
+        not restarted every cycle (that bug restarted a 13-minute upload
+        from chunk 1 repeatedly)."""
+        command = self._command("build-status", role="attacker")
+        client, calls = _recording_client(poll_response={"commands": [command]})
+        try:
+            workhorse_agent.run_once(client, self.executor, self.config, deadlines={})
+            self.assertIn(command["op_id"], workhorse_agent.IN_FLIGHT)
+            self.assertEqual(workhorse_agent.BUILD_QUEUE.qsize(), 1)
+            # The second poll delivers the same pending command…
+            workhorse_agent.run_once(client, self.executor, self.config, deadlines={})
+            # …but the queue still holds exactly one copy.
+            self.assertEqual(workhorse_agent.BUILD_QUEUE.qsize(), 1)
+            _, _, queued = workhorse_agent.BUILD_QUEUE.get_nowait()
+            self.assertEqual(queued["op_id"], command["op_id"])
+        finally:
+            workhorse_agent.IN_FLIGHT.discard(command["op_id"])
+            while not workhorse_agent.BUILD_QUEUE.empty():
+                workhorse_agent.BUILD_QUEUE.get_nowait()
+                workhorse_agent.BUILD_QUEUE.task_done()
+        self.assertNotIn(command["op_id"], workhorse_agent.IN_FLIGHT)
+
     def test_enforce_deadlines_only_touches_expired_labs(self):
         client, calls = _recording_client()
         deadlines = {

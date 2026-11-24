@@ -255,6 +255,42 @@ class AgentArtifactEndpointTests(TestCase):
         self.assertEqual(bad.status_code, 409)
         self.assertFalse(MachineImage.objects.filter(version="kali-bad").exists())
 
+    def test_build_artifact_endpoint_offsets_multi_chunk_and_requires_chunk_bytes(self):
+        """Multi-chunk uploads write at (seq-1)·chunk_bytes; the endpoint
+        refuses multi-chunk transfers without chunk_bytes (the controller
+        cannot place chunks without it)."""
+        from portal.apps.labs.models import MachineBuild, MachineImage
+        build = MachineBuild.objects.create(host=self.host, role="attacker",
+                                            version="kali-multi", base_version="")
+        import base64 as b64
+        import hashlib as _h
+        content = b"QFI\xfb\x00\x03aa-bb-cc"  # 14 bytes → three 5-byte chunks (last: 4)
+        chunk_bytes = 5
+        sha = _h.sha256(content).hexdigest()
+        auth = {"HTTP_AUTHORIZATION": f"Bearer {self.token}"}
+        chunks = [content[0:5], content[5:10], content[10:14]]
+
+        def post(seq, blob, **overrides):
+            payload = {"build_id": build.id, "role": "attacker", "version": "kali-multi",
+                       "file": "disk-template", "seq": seq, "total": 3, "sha256": sha,
+                       "size": len(content), "chunk_bytes": chunk_bytes,
+                       "data_b64": b64.b64encode(blob).decode()}
+            payload.update(overrides)
+            return self.client.post(reverse("agent-build-artifact"),
+                                    data=json.dumps(payload),
+                                    content_type="application/json", **auth)
+
+        self.assertEqual(post(2, chunks[1]).json()["complete"], False)
+        self.assertEqual(post(3, chunks[2]).json()["complete"], False)
+        # Missing chunk_bytes on a multi-chunk transfer is a 400.
+        self.assertEqual(post(1, chunks[0], chunk_bytes=None).status_code, 400)
+        self.assertEqual(post(1, chunks[0]).json()["complete"], True)
+        image = MachineImage.objects.get(role="attacker", version="kali-multi")
+        image.disk_file.open("rb")
+        self.assertEqual(image.disk_file.read(), content)
+        image.disk_file.close()
+        self.assertEqual(image.disk_file.name, "images/attacker-kali-multi-disk-template")
+
     def test_build_artifact_rejects_foreign_host_and_files(self):
         other = make_host("artifact-host-2")
         other_token = host_token(other)
