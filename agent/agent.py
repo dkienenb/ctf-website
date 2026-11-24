@@ -110,14 +110,15 @@ class LibvirtExecutor:
         )
 
     def virsh_probe(self, *args):
-        """virsh probe that reports (returncode, stdout) instead of raising —
-        for net-info/dumpxml existence checks. Like every other virsh spawn,
-        overridable in tests (tests_agent's RecordingExecutor)."""
+        """virsh probe that reports (returncode, output) instead of raising —
+        for net-info/dumpxml/net-update checks. stderr is folded in: net-update
+        refusals (e.g. duplicate entries) surface there. Overridable in tests
+        (tests_agent's RecordingExecutor)."""
         result = subprocess.run(
             ["virsh", "--connect", self.uri, *args],
             capture_output=True, text=True, timeout=60,
         )
-        return result.returncode, result.stdout
+        return result.returncode, result.stdout + result.stderr
 
     def domain_exists(self, name):
         result = subprocess.run(
@@ -652,6 +653,16 @@ class LibvirtExecutor:
             "dhcp_end": f"10.{lab_id}.0.200",
         }
 
+    def target_mac(self, lab_id):
+        """Deterministic per-lab target MAC (the hook for the DHCP pin and
+        the 'target' DNS name). Derived from the lab id, so every allocation
+        of the same lab reuses it."""
+        return f"52:54:00:aa:{int(lab_id) % 256:02x}:01"
+
+    def target_ip(self, lab_id):
+        """The target's pinned lab address: 10.<lab>.0.10."""
+        return f"10.{int(lab_id)}.0.10"
+
     def _ensure_lab_net(self, lab_id):
         """Define/start this lab's isolated network if not already active.
 
@@ -662,6 +673,7 @@ class LibvirtExecutor:
         net = self.lab_net(lab_id)
         code, out = self.virsh_probe("net-info", net["name"])
         if code == 0 and "Active:     yes" in out:
+            self._ensure_target_dns(net, lab_id)
             return net
         xml = (
             "<network>\n"
@@ -671,6 +683,7 @@ class LibvirtExecutor:
             f"  <ip address='{net['gateway']}' netmask='255.255.255.0'>\n"
             "    <dhcp>\n"
             f"      <range start='{net['dhcp_start']}' end='{net['dhcp_end']}'/>\n"
+            f"      <host mac='{self.target_mac(lab_id)}' name='target' ip='{self.target_ip(lab_id)}'/>\n"
             "    </dhcp>\n"
             "  </ip>\n"
             "</network>\n"
@@ -681,7 +694,30 @@ class LibvirtExecutor:
             self.virsh("net-define", str(xml_path))
         self.virsh_tolerant("net-autostart", net["name"])
         self.virsh_tolerant("net-start", net["name"])
+        self._ensure_target_dns(net, lab_id)
         return net
+
+    def _ensure_target_dns(self, net, lab_id):
+        """Register the 'target' DNS name on the lab network's dnsmasq.
+
+        A static dhcp-host entry does double duty: it pins the target's
+        lease to 10.<lab>.0.10 AND dnsmasq serves that hostname in the
+        network's DNS zone, so attackers resolve 'target' without learning
+        the subnet. Called on every allocate: for freshly defined networks
+        the entry already rode in the XML and the update is a harmless
+        duplicate refusal; for networks defined before this feature it adds
+        the pin without disturbing a running lease."""
+        host_xml = (
+            f"<host mac='{self.target_mac(lab_id)}' "
+            f"name='target' ip='{self.target_ip(lab_id)}'/>"
+        )
+        code, out = self.virsh_probe(
+            "net-update", net["name"], "add", "dhcp", "host", host_xml,
+            "--live", "--config")
+        if code != 0 and "already in use" not in out and "duplicate" not in out.lower() \
+                and "already exists" not in out.lower():
+            print(f"agent: target DNS pin not applied on {net['name']}: "
+                  f"{out.strip()[:200]}", file=sys.stderr)
 
     def _domain_network(self, name):
         """Source network of a defined domain ('' when unknown)."""
@@ -731,6 +767,7 @@ class LibvirtExecutor:
         target_template = self.template_dir("target", payload.get("target_version", ""))
         vnc_port = str(payload.get("vnc_port", "5900"))
         for name, directory, role in ((attacker, attacker_template, "attacker"), (target, target_template, "target")):
+            lab = int(payload.get("lab", 0))
             domain_xml = directory / "domain.xml"
             disk_source = self.disks_dir / f"{name}.qcow2"
             if not domain_xml.exists():
@@ -759,6 +796,21 @@ class LibvirtExecutor:
                    .replace("@NAME@", name)
                    .replace("@VNC_PORT@", vnc_port)
                    .replace("@LAB_NET@", expected_net))
+            if role == "target":
+                # Deterministic target identity (§17): a per-lab MAC so the
+                # lab network can pin the target's DHCP lease (10.<lab>.0.10)
+                # and register the DNS name "target" for it — players resolve
+                # the target without ever learning the subnet.
+                marker = "<interface type='network'>"
+                if marker in xml:
+                    xml = xml.replace(
+                        marker,
+                        f"{marker}\n      <mac address='{self.target_mac(lab)}'/>",
+                        1)
+                else:
+                    print(f"agent: target template {domain_xml.name} has no "
+                          "network interface; target DNS pin impossible",
+                          file=sys.stderr)
             xml_path = self.disks_dir / f"{name}.xml"
             xml_path.write_text(xml)
             self._ensure_disk(disk_source, directory / "disk-template", payload)

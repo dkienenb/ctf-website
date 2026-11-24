@@ -401,7 +401,9 @@ class AgentExecutorTests(TestCase):
             for role in ("attacker", "target"):
                 directory = executor.images_dir / role
                 directory.mkdir(parents=True)
-                (directory / "domain.xml").write_text("<domain><name>@NAME@</name><disk>@DISK@</disk></domain>")
+                (directory / "domain.xml").write_text(
+                    "<domain><name>@NAME@</name><disk>@DISK@</disk>"
+                    "<interface type='network'><source network='@LAB_NET@'/></interface></domain>")
             command = {"op_id": "abc123def456", "operation": "allocate", "payload": {"lab": 1}, "lab": 1}
             detail = workhorse_agent.execute(executor, command)
             self.assertFalse(detail["resumed"])
@@ -413,6 +415,18 @@ class AgentExecutorTests(TestCase):
             xml = (executor.disks_dir / "ctf-lab1-atk.xml").read_text()
             self.assertIn("ctf-lab1-atk", xml)
             self.assertIn("disk", xml)
+            # The attacker keeps its template's interface untouched — the
+            # deterministic identity belongs to the target only.
+            self.assertNotIn("<mac address='52:54:00:aa:01:01'/>", xml)
+            target_xml = (executor.disks_dir / "ctf-lab1-tgt.xml").read_text()
+            self.assertIn("<mac address='52:54:00:aa:01:01'/>", target_xml)
+            # The lab network carries the target's DHCP pin + DNS name
+            # (freshly defined nets embed it; net-update then re-asserts).
+            net_xml = (executor.disks_dir / "ctf-lab1-net.xml").read_text()
+            self.assertIn(
+                "<host mac='52:54:00:aa:01:01' name='target' ip='10.1.0.10'/>", net_xml)
+            self.assertEqual(executor.target_mac(1), "52:54:00:aa:01:01")
+            self.assertEqual(executor.target_ip(250), "10.250.0.10")
 
     def test_save_saves_then_undefines(self):
         import tempfile
